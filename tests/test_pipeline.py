@@ -339,7 +339,6 @@ def test_gdelt_backs_off_on_429_then_succeeds():
     assert len(items) == 1 and items[0].published == "2026-06-01"
     assert len([m for m in msgs if "429" in m]) == 2
     assert 7 in naps or 7.0 in naps                       # honoured Retry-After
-    assert g.pause > g.base_pause * 0.9                   # slowed down after being limited
 
 
 def test_gdelt_plain_text_rate_limit_is_not_read_as_zero_articles():
@@ -547,3 +546,88 @@ def test_streaming_run_equals_batch_path(tmp_path):
     pb = Pipeline(r, news, None, None, KeywordClassifier(), tmp_path / "b", tmp_path / "cb.jsonl", AS_OF)
     b = pb.run(hold, ingested=pb.ingest(hold))
     assert [x.to_dict() for x in a["scores"]] == [x.to_dict() for x in b["scores"]]
+
+
+# ---- the simple version: one request per stock, newest first, title must name the company -----------------------
+def _noisy_opener(n_title, n_noise):
+    """180-style response: some titles name the company, most are unrelated pages that merely mention it in the body."""
+    import urllib.parse as up
+    log = []
+
+    def opener(url, timeout=30):
+        q = up.parse_qs(up.urlparse(url).query)
+        log.append(q)
+        hi = q["enddatetime"][0][:8]
+        arts = [{"title": f"Bajaj Finance news item {hi} {k}", "url": f"https://x.com/t/{hi}/{k}", "seendate": hi + "T000000Z", "domain": "x.com"}
+                for k in range(n_title)]
+        arts += [{"title": f"Best ceiling fans {k}", "url": f"https://x.com/n/{hi}/{k}", "seendate": hi + "T000000Z", "domain": "x.com"}
+                 for k in range(n_noise)]
+        return _Resp(json.dumps({"articles": arts}))
+    return opener, log
+
+
+def test_one_request_per_stock_when_enough_titles_name_the_company(tmp_path):
+    from sentinelq.ingest.gdelt import GdeltNews
+    r = load_rubric()
+    from sentinelq.models import Holding
+    h = Holding("BAJFINANCE", "Bajaj Finance", "BFSI")
+    opener, log = _noisy_opener(n_title=60, n_noise=120)                       # 180 candidates, like the real run
+    g = GdeltNews(sleep=lambda s: None, opener=opener)                         # defaults: 90-day window
+    p = Pipeline(r, g, None, None, KeywordClassifier(), tmp_path / "o", tmp_path / "c.jsonl", date(2026, 7, 3), max_articles=50)
+    items, found, errs = p._fetch_stock(h)
+    assert len(log) == 1 and not errs                                          # ONE request, no rolling back needed
+    assert log[0]["sort"] == ["datedesc"] and log[0]["maxrecords"] == ["250"]  # newest first, up to 250
+    news = [i for i in items if i.kind == "news"]
+    assert found == 180 and len(news) == 50
+    assert all("Bajaj Finance" in i.title for i in news)                       # no ceiling fans / phones in the 50
+
+
+def test_steps_back_a_window_only_when_titles_are_scarce(tmp_path):
+    from sentinelq.ingest.gdelt import GdeltNews
+    from sentinelq.models import Holding
+    r = load_rubric()
+    h = Holding("BAJFINANCE", "Bajaj Finance", "BFSI")
+    opener, log = _noisy_opener(n_title=20, n_noise=50)                        # 20 good titles per window
+    g = GdeltNews(sleep=lambda s: None, opener=opener)
+    p = Pipeline(r, g, None, None, KeywordClassifier(), tmp_path / "o", tmp_path / "c.jsonl", date(2026, 7, 3), max_articles=50)
+    items, _, _ = p._fetch_stock(h)
+    assert len(log) == 3                                                       # 20 + 20 + 20 titles >= 50, then stop
+    assert len([i for i in items if i.kind == "news"]) == 50
+
+
+def test_syndicated_duplicate_titles_are_collapsed():
+    from sentinelq.ingest.select import name_tokens, select_articles
+    from sentinelq.models import Holding, RawItem
+    h = Holding("ANGELONE", "Angel One", "BFSI")
+    mk = lambda u: RawItem("ANGELONE", "news", "Angel One posts record client base!", "", u, "2026-06-01", "x.com")
+    out = select_articles([mk("https://a.com/1"), mk("https://b.com/2"), mk("https://c.com/3")], 50, name_tokens(h))
+    assert len(out) == 1
+
+
+def test_rate_limit_waits_are_short_and_flat():
+    from sentinelq.ingest.gdelt import GdeltNews
+    from sentinelq.models import Holding
+    seq = [_http429(), _http429(), _http429(), _Resp(GOOD)]
+    naps = []
+    g = GdeltNews(sleep=naps.append, opener=lambda url, timeout: (_ for _ in ()).throw(seq.pop(0)) if isinstance(seq[0], Exception) else seq.pop(0))
+    g.fetch(Holding("ANGELONE", "Angel One", "BFSI"), date(2026, 6, 20), date(2026, 7, 1))
+    waits = [n for n in naps if n >= 15]
+    assert waits == [20.0, 20.0, 20.0]                                         # flat 20 s, no doubling to minutes
+
+
+def test_fulltext_never_blocks_past_its_time_budget(monkeypatch):
+    import time
+    from sentinelq.ingest import fulltext
+    from sentinelq.models import RawItem
+
+    def slow_or_fast(url, *a, **k):
+        if "slow" in url:
+            time.sleep(3)
+        return "body " + url
+    monkeypatch.setattr(fulltext, "fetch_text", slow_or_fast)
+    items = [RawItem("X", "news", f"t{k}", "", f"https://x.com/{'slow' if k % 2 else 'fast'}/{k}", "2026-06-01") for k in range(6)]
+    t0 = time.time()
+    fulltext.enrich(items, budget=0.5)
+    assert time.time() - t0 < 2.0                                              # did not wait for the slow ones
+    assert sum(i.parse.startswith("full-text") for i in items) == 3
+    assert sum("timed out" in i.parse for i in items) == 3                     # those fall back to the headline

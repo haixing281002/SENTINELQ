@@ -39,27 +39,38 @@ def title_hit(title: str, tokens: list[str]) -> bool:
 
 
 def is_usable(item, tokens: list[str]) -> bool:
-    """Cheap, deterministic screen used both to decide when enough articles are in hand and to rank: a market
-    roundup that never names the company is not usable evidence (the same rule the prefilter applies later)."""
-    from ..style import classify_style
-    return item.kind != "news" or bool(item.title) and (title_hit(item.title, tokens) or classify_style(item) != "market-roundup")
+    """An article counts toward the 50 only if its TITLE names the company (precise, and needs no model call)."""
+    return item.kind != "news" or (bool(item.title) and title_hit(item.title, tokens))
 
 
 def count_usable(items: list, tokens: list[str]) -> int:
-    return sum(1 for i in items if i.kind == "news" and is_usable(i, tokens))
+    seen, n = set(), 0
+    for i in items:
+        if i.kind == "news" and is_usable(i, tokens):
+            k = re.sub(r"[^a-z0-9]", "", i.title.lower())
+            if k not in seen:
+                seen.add(k)
+                n += 1
+    return n
 
 
 def select_articles(items: list, cap: int | None, tokens: list[str]) -> list:
-    """The LATEST `cap` usable news articles (newest first; on the same day, company-in-title first). Unusable items
-    only fill the list if there are fewer than `cap` usable ones. Actions are always kept."""
+    """The LATEST `cap` articles whose title names the company (syndicated duplicates removed, newest first).
+    Other articles only fill the list if there are fewer than `cap` such titles. Actions are always kept."""
     news = [i for i in items if i.kind == "news"]
     rest = [i for i in items if i.kind != "news"]
-    order = lambda i: (i.published, title_hit(i.title, tokens), i.relevance)
+    order = lambda i: (i.published, i.relevance)
+    seen, uniq = set(), []
+    for i in sorted(news, key=order, reverse=True):
+        k = re.sub(r"[^a-z0-9]", "", (i.title or "").lower()) or i.url
+        if k not in seen:
+            seen.add(k)
+            uniq.append(i)
     if cap:
-        good = sorted((i for i in news if is_usable(i, tokens)), key=order, reverse=True)
-        bad = sorted((i for i in news if not is_usable(i, tokens)), key=order, reverse=True)
-        news = (good + bad)[:cap]
-    return sorted(news, key=order, reverse=True) + rest
+        good = [i for i in uniq if is_usable(i, tokens)]
+        bad = [i for i in uniq if not is_usable(i, tokens)]
+        uniq = (good + bad)[:cap]
+    return sorted(uniq, key=order, reverse=True) + rest
 
 
 def month_spark(items: list, start, end, ascii_only: bool = False) -> tuple[str, str]:
