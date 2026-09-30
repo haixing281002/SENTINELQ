@@ -1,0 +1,15 @@
+{
+  "ANGELONE": [
+    {"title": "SEBI settlement order: Angel One pays Rs 4.28cr over supervision of authorised persons", "url": "https://example.com/angel-sebi", "date": "2026-06-15", "source": "example.com"},
+    {"title": "Angel One Chief Product Officer resigns, effective 31-Aug-26", "url": "https://example.com/angel-cpo", "date": "2026-07-02", "source": "example.com"},
+    {"title": "Angel One May-26 business update: client base +19.5% YoY to 38.17mn, record funding book", "url": "https://example.com/angel-may", "date": "2026-06-05", "source": "example.com"},
+    {"title": "Angel One story with no source", "url": "", "date": "2026-06-06"}
+  ],
+  "HDFCBANK": [
+    {"title": "HDFC Bank record profit as net interest income rises", "url": "https://example.com/hdfc-q1", "date": "2026-07-10"},
+    {"title": "HDFC Bank upgrade by brokerage, raises target price", "url": "https://example.com/hdfc-up", "date": "2026-05-20"}
+  ],
+  "BPCL": [
+    {"title": "BPCL announces capacity expansion at Bina refinery", "url": "https://example.com/bpcl-cap", "date": "2026-02-11"}
+  ]
+}

@@ -1,0 +1,73 @@
+import json
+from datetime import date
+from pathlib import Path
+
+from sentinelq.classify import KeywordClassifier
+from sentinelq.ingest.files import FileActions, FileNews, FilePrices
+from sentinelq.pipeline import Pipeline, load_portfolio
+from sentinelq.rubric import load_rubric
+from sentinelq.validate import validate_label
+
+ROOT = Path(__file__).resolve().parent.parent
+FX = ROOT / "examples" / "fixtures"
+AS_OF = date(2026, 7, 15)
+
+
+def run(tmp_path, cache=None):
+    r = load_rubric()
+    p = Pipeline(r, FileNews(FX / "news.json"), FileActions(FX / "actions.json"),
+                 FilePrices(FX / "prices.csv"), KeywordClassifier(), tmp_path / "out",
+                 cache or tmp_path / "c.jsonl", AS_OF)
+    return p.run(load_portfolio(ROOT / "examples" / "portfolio.csv"))
+
+
+def test_angel_one_worked_example(tmp_path):
+    res = run(tmp_path)
+    s = {x.symbol: x for x in res["scores"]}["ANGELONE"]
+    assert s.governance_score == 72          # 100 - 20 (regulatory) - 8 (mgmt exit)
+    assert s.governance_label == "Flag"
+    assert {p["event_type"] for p in s.governance_penalties} == {"regulatory_action", "management_exit"}
+
+
+def test_no_source_dropped_and_disclosed(tmp_path):
+    res = run(tmp_path)
+    assert any(d.reason == "missing_source_url" for d in res["dropped"])
+    assert res["run"]["totals"]["dropped"] == len(res["dropped"]) >= 1
+    assert (tmp_path / "out" / "sentinelq_report.xlsx").exists()
+
+
+def test_deterministic_and_cached(tmp_path):
+    a = run(tmp_path)
+    b = run(tmp_path)   # second run reuses cache
+    assert [x.to_dict() for x in a["scores"]] == [x.to_dict() for x in b["scores"]]
+    assert all(li.from_cache for v in b["kept"].values() for li in v if li.item.kind == "news")
+
+
+def test_prices_never_affect_scores(tmp_path):
+    a = run(tmp_path)
+    r = load_rubric()
+    p = Pipeline(r, FileNews(FX / "news.json"), FileActions(FX / "actions.json"), None,
+                 KeywordClassifier(), tmp_path / "o2", tmp_path / "c.jsonl", AS_OF)
+    b = p.run(load_portfolio(ROOT / "examples" / "portfolio.csv"))
+    assert [x.to_dict() for x in a["scores"]] == [x.to_dict() for x in b["scores"]]
+
+
+def test_validation_rules():
+    from sentinelq.models import RawItem
+    r = load_rubric()
+    it = RawItem("X", "news", "t", "", "https://a.b/c", "2026-06-01")
+    ok = {"event_type": "other", "sentiment": 0, "rationale": "x", "governance_flag": False}
+    assert validate_label(it, ok, r, AS_OF, 365) is None
+    assert validate_label(it, {**ok, "sentiment": 3}, r, AS_OF, 365).startswith("sentiment_out_of_range")
+    assert validate_label(it, {**ok, "event_type": "nope"}, r, AS_OF, 365).startswith("invalid_event_type")
+    old = RawItem("X", "news", "t", "", "https://a.b/c", "2024-01-01")
+    assert validate_label(old, ok, r, AS_OF, 365) == "date_outside_lookback"
+
+
+def test_corporate_actions_and_sector(tmp_path):
+    res = run(tmp_path)
+    s = {x.symbol: x for x in res["scores"]}
+    assert s["HDFCBANK"].corporate_action_score == 1.0     # dividend, medium
+    assert s["BPCL"].corporate_action_score == 2.0         # 1.5 * 1.5 = 2.25 clipped to 2
+    assert s["ANGELONE"].sector_sentiment == s["HDFCBANK"].sector_sentiment
+    assert s["BPCL"].low_confidence

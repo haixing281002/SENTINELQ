@@ -1,0 +1,60 @@
+{
+  "version": "1.0.0",
+  "_note": "Single source of truth for every weight, penalty and taxonomy entry. Scores change only if this file changes. Values marked 'assumed' were not stated in the architecture document and should be confirmed by the committee.",
+
+  "event_types": [
+    "earnings_beat", "earnings_miss", "guidance_change", "order_win",
+    "litigation", "regulatory_action", "auditor_issue", "pledge",
+    "management_exit", "capacity_expansion", "analyst_action",
+    "operating_update", "investigation", "rpt_concern",
+    "dividend", "buyback", "split_bonus", "dilution", "merger_acquisition",
+    "other"
+  ],
+  "sentiment_range": [-2, 2],
+  "materiality_levels": ["low", "medium", "high"],
+
+  "windows": { "news_days": 365, "actions_days": 365, "prices_days": 183 },
+
+  "sentiment": {
+    "half_life_trading_days": 60,
+    "trading_days_per_year": 252
+  },
+
+  "governance": {
+    "start": 100,
+    "count_mode": "once_per_type",
+    "penalties": {
+      "regulatory_action": -20,
+      "investigation": -10,
+      "rpt_concern": -12,
+      "management_exit": -8,
+      "auditor_issue": -15,
+      "pledge": -10,
+      "litigation": -5
+    },
+    "penalties_assumed": ["auditor_issue", "pledge", "litigation"],
+    "labels": [
+      { "label": "Clean", "min": 95 },
+      { "label": "Watch", "min": 80 },
+      { "label": "Flag", "min": -1000 }
+    ]
+  },
+
+  "corporate_actions": {
+    "clip": [-2, 2],
+    "base": {
+      "dividend": 1.0,
+      "buyback": 1.5,
+      "split_bonus": 0.5,
+      "dilution": -1.5,
+      "merger_acquisition": "by_sentiment_sign"
+    },
+    "materiality_multiplier": { "low": 0.5, "medium": 1.0, "high": 1.5 },
+    "dividend_yield_materiality": { "medium_at": 0.01, "high_at": 0.03 },
+    "_note": "Base values and multipliers are assumed; the document specifies only direction and materiality scaling."
+  },
+
+  "confidence": { "low_below_items": 3 },
+
+  "portfolio_relative": { "winsor_sigma": 3.0 }
+}

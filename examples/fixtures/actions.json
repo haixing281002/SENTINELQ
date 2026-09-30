@@ -1,0 +1,4 @@
+{
+  "HDFCBANK": [{"type": "dividend", "title": "Final dividend Rs 19.5/share", "url": "https://example.com/hdfc-div", "date": "2026-06-12", "materiality": "medium", "direction": "positive"}],
+  "BPCL": [{"type": "buyback", "title": "Buyback announced", "url": "https://example.com/bpcl-bb", "date": "2026-04-01", "materiality": "high", "direction": "positive"}]
+}

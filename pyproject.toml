@@ -1,0 +1,20 @@
+[project]
+name = "sentinelq"
+version = "0.1.0"
+description = "Sentinel Q: caged-LLM evidence pipeline with deterministic scoring"
+requires-python = ">=3.10"
+dependencies = ["openpyxl>=3.1"]
+
+[project.optional-dependencies]
+llm = ["anthropic>=0.40"]
+prices = ["yfinance>=0.2"]
+dev = ["pytest"]
+
+[project.scripts]
+sentinelq = "sentinelq.cli:main"
+
+[tool.setuptools]
+packages = ["sentinelq", "sentinelq.ingest"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
