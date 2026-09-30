@@ -85,7 +85,13 @@ class Pipeline:
         w = self.r["windows"]
         raw: dict[str, list[RawItem]] = {}
         errors = []
+        icache = Path(self.text_cache).parent / "ingest"
         for h in holdings:
+            ck = icache / f"{self.as_of}_{h.symbol}_{self.max_articles}.json"
+            if ck.exists():                      # already fetched for this date/cap: don't hit GDELT again
+                raw[h.symbol] = [RawItem(**d) for d in json.loads(ck.read_text())]
+                continue
+            n_err = len(errors)
             items: list[RawItem] = []
             for prov, days in ((self.news, w["news_days"]), (self.actions, w["actions_days"])):
                 if prov is None:
@@ -98,6 +104,9 @@ class Pipeline:
                 news = sorted((i for i in items if i.kind == "news"), key=lambda i: i.published, reverse=True)
                 items = news[:self.max_articles] + [i for i in items if i.kind != "news"]
             raw[h.symbol] = items
+            if len(errors) == n_err and items:   # only cache clean fetches
+                icache.mkdir(parents=True, exist_ok=True)
+                ck.write_text(json.dumps([asdict(i) for i in items]))
         if self.fetch_text:
             from .ingest.fulltext import enrich
             enrich([i for v in raw.values() for i in v], self.text_cache)

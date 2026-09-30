@@ -34,3 +34,10 @@ one_line_read, key_corporate_action, coverage_note}, "_observations": [{title, b
   (`not_about_company`) - important for names like Titan or Bosch.
 * **`--fetch-text`:** fetches article body text so labels are not headline-only. Off by default (slower).
 * Score arithmetic, validation, and the audit trail are identical to the API path; only the labeller differs.
+
+## Windows notes
+* The npm install creates `claude.cmd`; the tool finds it automatically (also via `CLAUDE_BIN`, `%APPDATA%\npm`).
+  If not found it stops within seconds with instructions - it no longer runs for 10 minutes first.
+* Prompts are sent as UTF-8, so company names / symbols never break on the Windows code page.
+* Fetched articles are cached in `.cache/ingest/` and `.cache/fulltext.jsonl`, so a failed or repeated run does not
+  re-download them. Labels are cached in `.cache/labels.jsonl` only when the model actually returned one.

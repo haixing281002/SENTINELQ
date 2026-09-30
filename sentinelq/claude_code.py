@@ -18,16 +18,65 @@ from .narrate import SYSTEM as NARR_SYSTEM, TOOL as NARR_TOOL, default_observati
 from .rubric import Rubric
 
 
+INSTALL_HELP = (
+    "The `claude` command (Claude Code CLI) was not found.\n"
+    "  1. Install it:  npm install -g @anthropic-ai/claude-code   (then run `claude` once and log in)\n"
+    "  2. If it is installed but not on PATH, set CLAUDE_BIN to its full path, e.g.\n"
+    "       PowerShell:  $env:CLAUDE_BIN = (Get-Command claude.cmd).Source\n"
+    "       or            $env:CLAUDE_BIN = \"$env:APPDATA\\npm\\claude.cmd\"\n"
+    "  3. Or use another route: --classifier anthropic (needs ANTHROPIC_API_KEY) or --classifier file "
+    "(see docs/NO_API_KEY.md)."
+)
+
+
+def find_claude() -> str | None:
+    """Locate the CLI. On Windows the npm shim is claude.cmd, which subprocess cannot find by bare name."""
+    import os
+    import shutil
+    from pathlib import Path
+    env = os.environ.get("CLAUDE_BIN")
+    if env and Path(env).exists():
+        return env
+    for name in ("claude", "claude.cmd", "claude.exe"):
+        hit = shutil.which(name)
+        if hit:
+            return hit
+    home = Path.home()
+    cands = [Path(os.environ.get("APPDATA", "")) / "npm" / "claude.cmd", home / ".claude" / "local" / "claude",
+             home / ".claude" / "local" / "claude.exe", home / ".local" / "bin" / "claude",
+             Path("/usr/local/bin/claude"), Path("/opt/homebrew/bin/claude")]
+    return next((str(c) for c in cands if c.exists()), None)
+
+
+def preflight(model: str | None = None) -> None:
+    """Fail in seconds, not after a 10-minute run: the CLI must exist, start, and answer."""
+    exe = find_claude()
+    if not exe:
+        raise SystemExit(INSTALL_HELP)
+    try:
+        out = run_claude("Reply with the single word OK.", model, timeout=120)
+    except Exception as e:
+        raise SystemExit(f"`claude` was found at {exe} but a test call failed:\n  {e}\n"
+                         "Run `claude` once in a terminal to log in, then retry.")
+    print(f"  [claude-code] preflight ok ({exe}) -> {out.strip()[:20]!r}")
+
+
 def run_claude(prompt: str, model: str | None = None, timeout: int = 600) -> str:
-    cmd = ["claude", "-p", "--output-format", "json", "--no-session-persistence"]
+    exe = find_claude()
+    if not exe:
+        raise FileNotFoundError(INSTALL_HELP)
+    cmd = [exe, "-p", "--output-format", "json", "--no-session-persistence"]
     if model:
         cmd += ["--model", model]
-    with tempfile.TemporaryDirectory() as cwd:   # neutral cwd: don't load any project context
-        p = subprocess.run(cmd, input=prompt, capture_output=True, text=True, timeout=timeout, cwd=cwd)
+
+    def go(c):
+        with tempfile.TemporaryDirectory() as cwd:   # neutral cwd: don't load any project context
+            return subprocess.run(c, input=prompt, capture_output=True, text=True, encoding="utf-8",
+                                  errors="replace", timeout=timeout, cwd=cwd)
+    p = go(cmd)
     if p.returncode != 0 and "no-session-persistence" in (p.stderr or ""):
         cmd.remove("--no-session-persistence")
-        with tempfile.TemporaryDirectory() as cwd:
-            p = subprocess.run(cmd, input=prompt, capture_output=True, text=True, timeout=timeout, cwd=cwd)
+        p = go(cmd)
     if p.returncode != 0:
         raise RuntimeError(f"claude CLI failed ({p.returncode}): {(p.stderr or p.stdout)[:400]}")
     out = json.loads(p.stdout)
@@ -63,8 +112,15 @@ class ClaudeCodeClassifier:
         todo = [(i, c) for i, c in pairs if item_id(i) not in self._res]
         batches = [todo[k:k + self.bs] for k in range(0, len(todo), self.bs)]
         print(f"  [claude-code] labelling {len(todo)} items in {len(batches)} batches")
+        self.failed_batches = 0
         with ThreadPoolExecutor(self.workers) as ex:
             list(ex.map(self._label_batch, batches))
+        if batches and not any(item_id(i) in self._res for i, _ in todo):
+            raise RuntimeError("Model labelling failed for every batch - refusing to write an empty report. "
+                               "Check the [claude-code] errors above (see docs/NO_API_KEY.md).")
+        missing = sum(1 for i, _ in todo if item_id(i) not in self._res)
+        if missing:
+            print(f"  [claude-code] WARNING: {missing}/{len(todo)} items got no label (they will be retried once, then dropped and disclosed)")
 
     def classify(self, item, company):
         if item_id(item) not in self._res:      # retry path / uncached single item

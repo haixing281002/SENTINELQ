@@ -176,3 +176,36 @@ def test_pdf_pages_1_2_match_reference_geometry(tmp_path):
             if text in mine and not text.startswith(("Coverage", "30 holdings", "50 subset")):
                 assert mine[text][2:] == [font, size, colr], text
                 assert abs(mine[text][0] - x) <= 0.7 and abs(mine[text][1] - y) <= 0.7, (text, mine[text], x, y)
+
+
+def test_find_claude_respects_env_and_reports_missing(tmp_path, monkeypatch):
+    import pytest
+    from sentinelq import claude_code as cc
+    fake = tmp_path / "claude.cmd"
+    fake.write_text("x")
+    monkeypatch.setenv("CLAUDE_BIN", str(fake))
+    assert cc.find_claude() == str(fake)
+    monkeypatch.delenv("CLAUDE_BIN")
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    monkeypatch.setattr(cc.Path if hasattr(cc, "Path") else __import__("pathlib").Path, "exists", lambda self: False, raising=False)
+    with pytest.raises(SystemExit):
+        cc.preflight()
+
+
+def test_ingest_is_cached(tmp_path):
+    r = load_rubric()
+    hold = load_portfolio(ROOT / "examples" / "portfolio.csv")
+
+    class Once:
+        n = 0
+        def fetch(self, h, s, e):
+            Once.n += 1
+            return FileNews(FX / "news.json").fetch(h, s, e)
+    p = Pipeline(r, Once(), None, None, KeywordClassifier(), tmp_path / "o", tmp_path / "c.jsonl", AS_OF,
+                 text_cache=tmp_path / "ft.jsonl")
+    p.ingest(hold)
+    first = Once.n
+    p.ingest(hold)
+    assert Once.n == first == 3            # second ingest reads the cache, no provider calls

@@ -60,6 +60,9 @@ def main(argv=None):
         prices = None
 
     work = Path(a.work)
+    if a.classifier == "claude-code" or a.narrator == "claude-code":
+        from .claude_code import preflight
+        preflight(a.model)
     if a.classifier == "keyword":
         from .classify import KeywordClassifier
         clf = KeywordClassifier()
