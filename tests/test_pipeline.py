@@ -324,3 +324,115 @@ def test_partial_failure_is_reported_as_label_failed_not_irrelevant(tmp_path, mo
     assert reasons and reasons[0].startswith("label_failed") and "weird" in reasons[0]
     assert res["run"]["totals"]["label_failed"] == 1
     assert (tmp_path / "o" / "label_failures.jsonl").exists()
+
+
+# ---- GDELT rate limits & missing news (the "0 articles every 3rd stock" failure) --------------------------------
+class _Resp:
+    def __init__(self, body): self.body = body
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+    def read(self): return self.body.encode()
+
+
+def _http429(retry_after=None):
+    import urllib.error
+    hdrs = {"Retry-After": str(retry_after)} if retry_after else {}
+    return urllib.error.HTTPError("u", 429, "Too Many Requests", hdrs, None)
+
+
+GOOD = json.dumps({"articles": [{"title": "Angel One posts record profit", "url": "https://x.com/a", "seendate": "20260601T000000Z", "domain": "x.com"}]})
+
+
+def test_gdelt_backs_off_on_429_then_succeeds():
+    from sentinelq.ingest.gdelt import GdeltNews
+    from sentinelq.models import Holding
+    seq = [_http429(), _http429(7), _Resp(GOOD)]
+    naps, msgs = [], []
+    g = GdeltNews(sleep=naps.append, opener=lambda url, timeout: (_ for _ in ()).throw(seq.pop(0)) if isinstance(seq[0], Exception) else seq.pop(0))
+    g.on_event = msgs.append
+    items = g.fetch(Holding("ANGELONE", "Angel One", "BFSI"), date(2025, 7, 1), date(2026, 7, 1))
+    assert len(items) == 1 and items[0].published == "2026-06-01"
+    assert len(msgs) == 2 and "429" in msgs[0]
+    assert 7 in naps or 7.0 in naps                       # honoured Retry-After
+    assert g.pause > g.base_pause * 0.9                   # slowed down after being limited
+
+
+def test_gdelt_plain_text_rate_limit_is_not_read_as_zero_articles():
+    import pytest
+    from sentinelq.ingest.gdelt import GdeltNews, GdeltRateLimited
+    from sentinelq.models import Holding
+    g = GdeltNews(retries=2, sleep=lambda s: None, opener=lambda url, timeout: _Resp("Please limit requests to one every 5 seconds."))
+    with pytest.raises(GdeltRateLimited):
+        g.fetch(Holding("X", "Co X", "S"), date(2025, 7, 1), date(2026, 7, 1))
+
+
+def _flaky_news(fail_times):
+    class Flaky:
+        calls = {}
+        def fetch(self, h, s, e):
+            Flaky.calls[h.symbol] = Flaky.calls.get(h.symbol, 0) + 1
+            if h.symbol == "BPCL" and Flaky.calls[h.symbol] <= fail_times:
+                raise RuntimeError("HTTP 429")
+            return FileNews(FX / "news.json").fetch(h, s, e)
+    return Flaky()
+
+
+def test_failed_stock_is_retried_and_recovered(tmp_path):
+    r = load_rubric()
+    hold = load_portfolio(ROOT / "examples" / "portfolio.csv")
+    p = Pipeline(r, _flaky_news(1), None, None, KeywordClassifier(), tmp_path / "o", tmp_path / "c.jsonl", AS_OF,
+                 text_cache=tmp_path / "ft.jsonl", ingest_retry_wait=0)
+    raw, errs = p.ingest(hold)
+    assert not errs and len([i for i in raw["BPCL"] if i.kind == "news"]) == 1
+
+
+def test_persistent_news_failure_blocks_report_but_keeps_cache(tmp_path):
+    import pytest
+    r = load_rubric()
+    hold = load_portfolio(ROOT / "examples" / "portfolio.csv")
+    news = _flaky_news(99)
+    p = Pipeline(r, news, None, None, KeywordClassifier(), tmp_path / "o", tmp_path / "c.jsonl", AS_OF,
+                 text_cache=tmp_path / "ft.jsonl", ingest_retry_wait=0)
+    with pytest.raises(RuntimeError, match="BPCL"):
+        p.ingest(hold)
+    assert (tmp_path / "ingest" / f"{AS_OF}_ANGELONE_None.json").exists()          # good stocks are cached
+    assert not (tmp_path / "ingest" / f"{AS_OF}_BPCL_None.json").exists()          # the failed one is not
+    p2 = Pipeline(r, news, None, None, KeywordClassifier(), tmp_path / "o2", tmp_path / "c.jsonl", AS_OF,
+                  text_cache=tmp_path / "ft.jsonl", ingest_retry_wait=0, allow_missing_news=True)
+    raw, errs = p2.ingest(hold)                     # override accepts the gap
+    assert errs and "BPCL" in raw
+
+
+def test_generic_market_headlines_are_prefiltered_and_disclosed(tmp_path):
+    from sentinelq.models import Holding, RawItem
+    r = load_rubric()
+    h = Holding("BAJFINANCE", "Bajaj Finance", "BFSI")
+
+    class Fixed:
+        def fetch(self, hh, s, e):
+            mk = lambda t, u: RawItem("BAJFINANCE", "news", t, "", u, "2026-06-01", "x.com")
+            return [mk("Sensex ends 250 pts lower as banks drag", "https://x.com/1"),
+                    mk("Sensex, Nifty rally; Bajaj Finance among top gainers", "https://x.com/2"),
+                    mk("Bajaj Finance Q4 profit rises 22%", "https://x.com/3")]
+    p = Pipeline(r, Fixed(), None, None, KeywordClassifier(), tmp_path / "o", tmp_path / "c.jsonl", AS_OF,
+                 text_cache=tmp_path / "ft.jsonl")
+    res = p.run([h])
+    reasons = {d.headline: d.reason for d in res["dropped"]}
+    assert reasons["Sensex ends 250 pts lower as banks drag"] == "generic_market_headline"
+    assert "Sensex, Nifty rally; Bajaj Finance among top gainers" not in reasons      # names the company: model decides
+    assert "Bajaj Finance Q4 profit rises 22%" not in reasons
+
+
+def test_cache_entry_with_no_news_is_refetched(tmp_path):
+    from sentinelq.models import RawItem
+    r = load_rubric()
+    hold = load_portfolio(ROOT / "examples" / "portfolio.csv")[:1]
+    icache = tmp_path / "ingest"
+    icache.mkdir()
+    stale = [RawItem("ANGELONE", "action", "Div", "", "https://x/y", "2026-05-01")]     # a silently-empty old fetch
+    from dataclasses import asdict
+    (icache / f"{AS_OF}_ANGELONE_None.json").write_text(json.dumps([asdict(i) for i in stale]))
+    p = Pipeline(r, FileNews(FX / "news.json"), None, None, KeywordClassifier(), tmp_path / "o", tmp_path / "c.jsonl", AS_OF,
+                 text_cache=tmp_path / "ft.jsonl")
+    raw, _ = p.ingest(hold)
+    assert any(i.kind == "news" for i in raw["ANGELONE"])

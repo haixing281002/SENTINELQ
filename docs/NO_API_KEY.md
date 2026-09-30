@@ -70,3 +70,15 @@ Labelling ████████░░░░░░░░░░░░░░░�
   automatically when output is captured, e.g. inside Claude Code). `--ascii` for terminals that garble block characters.
 * Every run also writes `work/run.log` (plain text) and `work/progress.json` (machine-readable snapshot). From a second
   terminal: `tail -f work/run.log`. Inside Claude Code, ask it to run the command in the background and tail that log.
+
+## GDELT rate limits and missing news
+* The GDELT client paces itself (~8s between requests, slower after a limit), backs off on HTTP 429 / 5xx / its plain-text
+  "please limit requests" reply (honouring `Retry-After`), and **raises** if it cannot get an answer - a rate limit is never
+  read as "no news". Retries are shown in the run display and `work/run.log`.
+* Stocks whose fetch failed get one more attempt after a 60s cool-down at the end of ingest. If any still fail, the run stops
+  before scoring (so they are not scored on corporate actions alone). Stocks that did fetch are cached in `.cache/ingest/`;
+  re-run the same command later and only the failed ones are fetched. `--allow-missing-news` overrides.
+* Cache entries containing no news are treated as suspect and refetched.
+* Generic market roundups ("Sensex ends 250 pts lower") that never name the company are set aside before labelling, saving
+  model calls; each is listed in `dropped.jsonl` as `generic_market_headline`. Roundups that do name the company still go to
+  the model, which decides relevance (`not_about_company`). Disable with `--no-prefilter`.

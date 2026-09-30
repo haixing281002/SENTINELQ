@@ -38,6 +38,8 @@ def main(argv=None):
                    help="live = redrawing bar (real terminal); plain = line-by-line (logs, Claude Code); auto picks")
     p.add_argument("--log", default="work/run.log", help="plain-text copy of the run display (tail -f it)")
     p.add_argument("--ascii", action="store_true", help="ASCII bars (#---) instead of block characters")
+    p.add_argument("--allow-missing-news", action="store_true", help="continue even if news fetch failed for some stocks")
+    p.add_argument("--no-prefilter", action="store_true", help="send generic market-roundup headlines to the model too")
     p.add_argument("--fetch-text", action="store_true", help="fetch article body text (better labels than headlines)")
     p.add_argument("--work", default="work", help="dir for hand-off files (file mode)")
     a = p.parse_args(argv)
@@ -109,7 +111,8 @@ def main(argv=None):
         p.error("give --portfolio or --pick")
     pipe = Pipeline(r, news, actions, prices, clf, out, a.cache, as_of, a.mode,
                     narrator, a.title, a.coverage, a.max_articles, a.fetch_text,
-                    1.01 if a.allow_partial_labels else 0.10, ui=ui)
+                    1.01 if a.allow_partial_labels else 0.10, ui=ui,
+                    allow_missing_news=a.allow_missing_news, prefilter=not a.no_prefilter)
     from .resolve import enrich
     holdings = enrich(holdings, a.universe, mode="none" if a.classifier in ("keyword", "file") else "claude-code", model=a.model)
     ingested = None

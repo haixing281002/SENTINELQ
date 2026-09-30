@@ -69,6 +69,19 @@ def pick_holdings(universe: str | Path, queries: list[str]) -> list[Holding]:
     return [Holding(h.symbol, h.name, h.sector, h.cap, "") for h in out]
 
 
+_GENERIC = {"india", "indian", "ltd", "limited", "company", "co", "corp", "corporation", "industries", "industry", "the", "and",
+            "of", "bank", "laboratories", "pharma", "pharmaceuticals", "motors", "finance", "financial", "technologies", "engineering",
+            "asset", "management", "services", "small", "forgings", "precision", "automation", "life", "power"}
+
+
+def name_tokens(h: Holding) -> list[str]:
+    """Words that identify the company in a headline (symbol and distinctive name words)."""
+    import re
+    words = [w for w in re.findall(r"[a-z0-9&']+", h.name.lower()) if len(w) >= 2]
+    distinct = [w for w in words if w not in _GENERIC] or words
+    return list({*distinct, re.sub(r"[^a-z0-9]", "", h.symbol.lower()), h.name.lower()})
+
+
 class Pipeline:
     def __init__(self, rubric: Rubric, news, actions, prices, classifier: Classifier,
                  out_dir: str | Path, cache_path: str | Path = ".cache/labels.jsonl",
@@ -76,7 +89,8 @@ class Pipeline:
                  narrator=None, title: str = "Portfolio", coverage: str = "",
                  max_articles: int | None = None, fetch_text: bool = False,
                  max_label_failure: float = 0.10,
-                 text_cache: str | Path = ".cache/fulltext.jsonl", ui: Display | None = None):
+                 text_cache: str | Path = ".cache/fulltext.jsonl", ui: Display | None = None,
+                 allow_missing_news: bool = False, ingest_retry_wait: float = 60.0, prefilter: bool = True):
         self.r, self.news, self.actions, self.prices, self.clf = rubric, news, actions, prices, classifier
         self.out = Path(out_dir)
         self.cache = LabelCache(cache_path)
@@ -88,52 +102,97 @@ class Pipeline:
         self.narrator = narrator or TemplateNarrator()
         self.meta = {"title": title, "coverage": coverage}
         self.ui = ui or Display("off")
+        self.allow_missing_news, self.ingest_retry_wait, self.prefilter = allow_missing_news, ingest_retry_wait, prefilter
+        if hasattr(self.news, "on_event"):
+            self.news.on_event = lambda m: self.ui.note("  " + m, "y")
 
     # -- Stage 2 --------------------------------------------------------------------
+    def _fetch_stock(self, h):
+        w = self.r["windows"]
+        items, errs = [], []
+        for prov, days in ((self.news, w["news_days"]), (self.actions, w["actions_days"])):
+            if prov is None:
+                continue
+            try:
+                items += prov.fetch(h, self.as_of - timedelta(days=days), self.as_of)
+            except Exception as e:  # a provider failure must be visible, not fatal
+                errs.append({"symbol": h.symbol, "provider": type(prov).__name__, "error": repr(e)})
+        found = len([i for i in items if i.kind == "news"])
+        if self.max_articles:   # cap news per company, newest first; actions are never capped
+            news = sorted((i for i in items if i.kind == "news"), key=lambda i: i.published, reverse=True)
+            items = news[:self.max_articles] + [i for i in items if i.kind != "news"]
+        return items, found, errs
+
+    def _finish_items(self, items):
+        for i in items:
+            i.style = classify_style(i)
+            if i.kind == "news" and not i.parse:
+                i.parse = "headline-only"
+        return items
+
     def ingest(self, holdings):
         ui = self.ui
         ui.stage("Ingest", "news + corporate actions per stock, deduplicated by URL")
-        w = self.r["windows"]
         raw: dict[str, list[RawItem]] = {}
-        errors = []
+        errors: list[dict] = []
         icache = Path(self.text_cache).parent / "ingest"
         n = len(holdings)
+        failed: list = []
+
+        def show(idx, h, items, found, err_txt, from_cache, secs):
+            nn = [i for i in items if i.kind == "news"]
+            ui.ingest_stock(idx, n, h, found, len(nn), len(items) - len(nn), Counter(i.style for i in nn),
+                            from_cache, err_txt, secs, self.max_articles)
+
         for idx, h in enumerate(holdings, 1):
             t0 = time.time()
             ck = icache / f"{self.as_of}_{h.symbol}_{self.max_articles}.json"
-            from_cache, found, err_txt = False, 0, []
-            if ck.exists():                      # already fetched for this date/cap: don't hit GDELT again
-                items = [RawItem(**d) for d in json.loads(ck.read_text(encoding="utf-8"))]
-                found, from_cache = len([i for i in items if i.kind == "news"]), True
-            else:
-                n_err = len(errors)
-                items = []
-                ui.status(f"Ingest {idx}/{n}  {h.symbol}: fetching news ...", "ingest", idx - 1, n)
-                for prov, days in ((self.news, w["news_days"]), (self.actions, w["actions_days"])):
-                    if prov is None:
-                        continue
-                    try:
-                        items += prov.fetch(h, self.as_of - timedelta(days=days), self.as_of)
-                    except Exception as e:  # a provider failure must be visible, not fatal
-                        errors.append({"symbol": h.symbol, "provider": type(prov).__name__, "error": repr(e)})
-                        err_txt.append(f"{type(prov).__name__}: {e!r}"[:160])
-                found = len([i for i in items if i.kind == "news"])
-                if self.max_articles:   # cap news per company, newest first; actions are never capped
-                    news = sorted((i for i in items if i.kind == "news"), key=lambda i: i.published, reverse=True)
-                    items = news[:self.max_articles] + [i for i in items if i.kind != "news"]
-                if len(errors) == n_err and items:   # only cache clean fetches
-                    icache.mkdir(parents=True, exist_ok=True)
-                    for i in items:
-                        i.style = classify_style(i)
-                    ck.write_text(json.dumps([asdict(i) for i in items]), encoding="utf-8")
-            for i in items:
-                i.style = classify_style(i)
-                if i.kind == "news" and not i.parse:
-                    i.parse = "headline-only"
+            cached = self._finish_items([RawItem(**d) for d in json.loads(ck.read_text(encoding="utf-8"))]) if ck.exists() else []
+            if any(i.kind == "news" for i in cached):     # cached with news: don't hit GDELT again
+                items = cached
+                raw[h.symbol] = items
+                show(idx, h, items, len([i for i in items if i.kind == "news"]), [], True, 0)
+                continue
+            ui.status(f"Ingest {idx}/{n}  {h.symbol}: fetching news ...", "ingest", idx - 1, n)
+            items, found, errs = self._fetch_stock(h)
+            items = self._finish_items(items)
             raw[h.symbol] = items
-            nn = [i for i in items if i.kind == "news"]
-            ui.ingest_stock(idx, n, h, found, len(nn), len(items) - len(nn), Counter(i.style for i in nn),
-                            from_cache, err_txt, time.time() - t0, self.max_articles)
+            if errs:
+                failed.append(h)
+                errors += errs
+            elif items:
+                icache.mkdir(parents=True, exist_ok=True)
+                ck.write_text(json.dumps([asdict(i) for i in items]), encoding="utf-8")
+            show(idx, h, items, found, [f"{e['provider']}: {e['error']}"[:160] for e in errs], False, time.time() - t0)
+
+        if failed:   # second pass after a cooldown, before anything is scored on missing news
+            ui.note(f"  {len(failed)} stock(s) had fetch errors ({', '.join(h.symbol for h in failed)}); "
+                    f"cooling down {self.ingest_retry_wait:.0f}s then retrying once ...", "y")
+            if self.ingest_retry_wait:
+                time.sleep(self.ingest_retry_wait)
+            still = []
+            for h in failed:
+                t0 = time.time()
+                items, found, errs = self._fetch_stock(h)
+                items = self._finish_items(items)
+                if errs:
+                    still.append(h)
+                    ui.note(f"  retry {h.symbol}: still failing - {errs[0]['error'][:120]}", "r")
+                    continue
+                raw[h.symbol] = items
+                errors[:] = [e for e in errors if e["symbol"] != h.symbol]
+                icache.mkdir(parents=True, exist_ok=True)
+                (icache / f"{self.as_of}_{h.symbol}_{self.max_articles}.json").write_text(
+                    json.dumps([asdict(i) for i in items]), encoding="utf-8")
+                nn = [i for i in items if i.kind == "news"]
+                ui.note(f"  retry {h.symbol}: recovered {len(nn)} articles", "g")
+            if still:
+                msg = (f"News could not be fetched for {len(still)} stock(s): {', '.join(h.symbol for h in still)}. "
+                       "Scoring them on corporate actions alone would understate coverage. Stocks that did fetch are cached - "
+                       "re-run the same command later to fetch only these (or pass --allow-missing-news to accept the gap).")
+                if not self.allow_missing_news:
+                    raise RuntimeError(msg)
+                ui.note("WARNING: " + msg, "y")
         if self.fetch_text:
             from .ingest.fulltext import enrich
             ui.note("  fetching article body text for better labels (cached per URL) ...", "d")
@@ -162,8 +221,25 @@ class Pipeline:
     # -- Stages 3+4 -----------------------------------------------------------------
     def classify_and_validate(self, holdings, raw):
         ui = self.ui
-        ui.stage("Classify", f"model labels each item; schema-forced, validated ({self.clf.model_id})")
         names = {h.symbol: h.name for h in holdings}
+        pre_dropped: list[Dropped] = []
+        if self.prefilter:   # market roundups that never name the company: cheap, deterministic, and disclosed
+            hm = {h.symbol: h for h in holdings}
+            filtered = {}
+            for sym, its in raw.items():
+                toks = name_tokens(hm[sym])
+                keep = []
+                for i in its:
+                    if i.kind == "news" and i.style == "market-roundup" and not any(t in i.title.lower() for t in toks):
+                        pre_dropped.append(Dropped(sym, i.title, i.url, i.published, "prefilter", "generic_market_headline"))
+                    else:
+                        keep.append(i)
+                filtered[sym] = keep
+            raw = filtered
+        ui.stage("Classify", f"model labels each item; schema-forced, validated ({self.clf.model_id})")
+        if pre_dropped:
+            ui.note(f"  prefilter: {len(pre_dropped)} generic market-roundup headline(s) that never name the company "
+                    f"were set aside without a model call (listed in dropped.jsonl)", "d")
         key_of = lambda i: item_key(i.url, i.title, i.snippet, self.clf.model_id, PROMPT_VERSION)
         need = [(i, names[sym]) for sym, its in raw.items() for i in its if i.prelabel is None and i.url.strip()]
         todo = [(i, c) for i, c in need if not self.cache.get(key_of(i))]
@@ -212,6 +288,7 @@ class Pipeline:
                 kept[sym].append(LabelledItem(it, to_label(label_d), resp, cached, attempts))
                 ev[label_d["event_type"]] += 1
             ui.stock_validated(hmap[sym], len(kept[sym]), len(items), Counter(d.reason.split(":")[0] for d in dropped[drop0:]), ev, None)
+        dropped[:0] = pre_dropped
         return kept, dropped, raw_log
 
     # -- Full run -------------------------------------------------------------------
