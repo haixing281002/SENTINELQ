@@ -157,3 +157,22 @@ def test_given_table_parses_and_resolves():
     assert "TITAN" in m and "NSE:TITAN" not in m          # exchange prefix stripped
     assert m["NATIONALUM"].name == "National Aluminium"    # legal suffixes cleaned
     assert m["ANGELONE"].sector == "BFSI" and m["ANGELONE"].cap == "Small"
+
+
+def test_pdf_pages_1_2_match_reference_geometry(tmp_path):
+    """Pages 1-2 are static text: fonts, sizes, colours and x/y positions must equal the reference scorecard."""
+    import pymupdf
+    ref = json.loads((ROOT / "tests" / "data" / "reference_pages_1_2.json").read_text())
+    run(tmp_path)
+    pdf = pymupdf.open(tmp_path / "out" / "sentinelq_scorecard.pdf")
+    assert pdf[0].rect.width == 595.2755737304688 and pdf.metadata["author"] == "Portfolio Signal Engine (prototype)"
+    for pn in ("1", "2"):
+        mine = {}
+        for b in pdf[int(pn) - 1].get_text("dict")["blocks"]:
+            for l in b.get("lines", []):
+                s = l["spans"][0]
+                mine.setdefault(s["text"][:28], [round(s["bbox"][0], 1), round(s["bbox"][1], 1), s["font"], round(s["size"], 1), f'{s["color"]:06x}'])
+        for text, x, y, font, size, colr in ref[pn]:
+            if text in mine and not text.startswith(("Coverage", "30 holdings", "50 subset")):
+                assert mine[text][2:] == [font, size, colr], text
+                assert abs(mine[text][0] - x) <= 0.7 and abs(mine[text][1] - y) <= 0.7, (text, mine[text], x, y)

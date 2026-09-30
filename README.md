@@ -43,3 +43,10 @@ Prose in the PDF (rationales, one-line reads, observations) is written by the mo
 `.claude/skills/sentinelq` (full scorecard for any stock names) and `.claude/skills/sentinelq-governance` (governance
 score with arithmetic) are project skills: they load automatically whenever Claude Code is opened in this repo.
 Quick run for typed names: `sentinelq --pick "Angel One, Titan Company"` (resolves against `portfolio/universe.csv`; no weights needed - Cap/Wt columns show only if you supply them).
+
+## PDF fidelity
+`sentinelq/pdf.py` reproduces the reference QVM scorecard (A4 portrait, ReportLab core fonts, palette
+`#1a2452 #2c3a70 #5a6b9e #1f2637 #c9d1e5 #f3f6fd`, label fills Clean `#e4f1ea` / Watch `#fbf1de` / Flag `#f7e4e5`,
+score text `#2e7d5b #4a8f6d #a97528 #9b2f35`). A test compares pages 1-2 against the reference coordinates.
+Deliberate fixes vs the reference: rupee shown as "Rs" (the reference printed black boxes), no mid-word wraps
+("Lookbac/k", "Larg/e"), true minus signs.

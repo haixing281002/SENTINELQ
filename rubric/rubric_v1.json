@@ -1,5 +1,5 @@
 {
-  "version": "1.1.0",
+  "version": "1.2.0",
   "_note": "Single source of truth for every weight, penalty and taxonomy entry. Scores change only if this file changes. Values marked 'assumed' were not stated in the architecture document and should be confirmed by the committee.",
   "event_types": [
     "earnings_beat",
@@ -11,7 +11,6 @@
     "auditor_resignation",
     "auditor_restatement",
     "exchange_fine",
-    "pledge",
     "management_exit",
     "board_independence",
     "investigation",
@@ -24,7 +23,8 @@
     "split_bonus",
     "dilution",
     "merger_acquisition",
-    "other"
+    "other",
+    "pledge"
   ],
   "sentiment_range": [
     -2,
@@ -53,7 +53,6 @@
       "regulatory_action": -20,
       "rpt_concern": -12,
       "investigation": -10,
-      "pledge": -10,
       "exchange_fine": {
         "low": -5,
         "medium": -7,
@@ -63,7 +62,6 @@
       "board_independence": -8
     },
     "penalties_assumed": [
-      "pledge",
       "exchange_fine (medium=-7 interpolated)"
     ],
     "labels": [
@@ -84,7 +82,7 @@
     "notes": {
       "auditor_restatement": [
         "Auditor resignation or restatement",
-        "Highest-severity integrity events. -25 restatement / -20 resignation."
+        "Highest-severity integrity events."
       ],
       "regulatory_action": [
         "Regulatory action or settlement",
@@ -100,7 +98,7 @@
       ],
       "exchange_fine": [
         "Exchange fine / disclosure lapse",
-        "Non-integrity procedural penalties (-5 to -10 by materiality)."
+        "Non-integrity procedural penalties."
       ],
       "management_exit": [
         "Management or compliance churn",
@@ -117,17 +115,27 @@
     },
     "label_text": {
       "Clean": [
-        "\u2265 95",
+        "≥ 95",
         "No material adverse events in the 12-month window."
       ],
       "Watch": [
-        "80\u201394",
+        "80–94",
         "One or more disclosed items warranting monitoring; not integrity-level."
       ],
       "Flag": [
         "< 80",
         "Live or recent event requiring IC-level attention before adding risk."
       ]
+    },
+    "display": {
+      "auditor_restatement": "−25 / −20",
+      "regulatory_action": "−20",
+      "rpt_concern": "−12",
+      "investigation": "−10",
+      "exchange_fine": "−5 to −10",
+      "management_exit": "−8",
+      "board_independence": "−8",
+      "historical": "−5"
     }
   },
   "corporate_actions": {
@@ -166,7 +174,7 @@
     ],
     [
       1,
-      "Positive year on balance, but with a specific offset \u2014 one weak quarter, an execution issue, or a valuation caution \u2014 that prevents the maximum score."
+      "Positive year on balance, but with a specific offset — one weak quarter, an execution issue, or a valuation caution — that prevents the maximum score."
     ],
     [
       0,

@@ -15,11 +15,16 @@ from .models import LabelledItem, StockScore
 CA_TYPES = {"dividend", "buyback", "split_bonus", "dilution", "merger_acquisition", "capacity_expansion"}
 
 SYSTEM = (
-    "You write the analyst commentary for an investment-committee scorecard. The scores and penalties "
-    "are FINAL and were computed by fixed rules; you must not change, re-derive or contradict them. "
-    "Use ONLY the evidence rows supplied (each has a date, headline, label and URL); do not add facts "
-    "from memory. Cite dates and figures that appear in the evidence. Plain, factual, IC-ready tone. "
-    "If evidence is thin or sources conflict, say so explicitly. Answer by calling the tool."
+    "You write the analyst commentary for an investment-committee scorecard (house style: plain, factual, precise, "
+    "no hype, no advice). The scores and penalties are FINAL and were computed by fixed rules; you must not change, "
+    "re-derive or contradict them. Use ONLY the evidence rows supplied (each has a date, headline, label and URL); "
+    "add no facts from memory. Cite dates in the form 30-Apr-26 and figures exactly as they appear in the evidence. "
+    "Write 'Rs' for rupees (never the rupee symbol). If evidence is thin or sources conflict, say so explicitly in the "
+    "rationale itself, as a plain statement about coverage (for example 'only two dated items were retrieved'). "
+    "STYLE RULES: write the finished report text, never commentary about your inputs - do not say 'the evidence', 'the facts "
+    "supplied', 'rows', 'payload' or 'provided'. Never print URLs. Write event types as words ('regulatory action', not "
+    "regulatory_action). Write dates without a leading zero (5-Jun-26). Scores are whole numbers (72, not 72.0); never mention "
+    "unrounded values. Use a real minus sign or plain hyphen for negatives (-20). Answer by calling the tool."
 )
 
 TOOL = {
@@ -28,16 +33,34 @@ TOOL = {
     "input_schema": {
         "type": "object",
         "properties": {
-            "sentiment_rationale": {"type": "string", "description": "1-2 short paragraphs: the sentiment case, offsets, and why the fixed score stands."},
-            "governance_rationale": {"type": "string", "description": "Which penalties were applied (from the list given), the arithmetic, and any non-scored context."},
-            "one_line_read": {"type": "string", "description": "At most 8 words."},
-            "key_corporate_action": {"type": "string", "description": "Short factual list of the key corporate actions in the evidence, or an em dash if none."},
-            "coverage_note": {"type": "string", "description": "Empty unless coverage is thin or sources conflict."},
+            "sentiment_rationale": {"type": "string", "description": (
+                "Two short paragraphs separated by a blank line. Paragraph 1: the positive case with dated, sourced facts "
+                "and figures (results, guidance, broker views). Paragraph 2: the offsets or the absence of offsets in the "
+                "twelve-month window, ending with a sentence that explains why the fixed sentiment score stands "
+                "(e.g. 'The score therefore stands at +2 - sustained beats with broad confirming evidence and no counterweight.'). "
+                "Use the supplied sentiment score verbatim.")},
+            "governance_rationale": {"type": "string", "description": (
+                "One to three short paragraphs. If penalties were applied: say which event and its date, then the arithmetic "
+                "in words using ONLY the supplied penalties ('The scoring applies -20 for the disclosed regulatory action to reach 80, "
+                "then a further -8 for the CPO resignation, arriving at 72 (Flag).'). If none: 'No adverse governance events are present "
+                "in the lookback.' Mention routine or out-of-window items that were deliberately not scored, and any memory-discount. "
+                "Use the supplied governance score and label verbatim.")},
+            "one_line_read": {"type": "string", "description": "2 to 5 words, e.g. 'Confirmed compounder', 'Momentum intact', 'Regulatory scar; strong operations'."},
+            "key_corporate_action": {"type": "string", "description": "Terse list of the key corporate actions in the evidence, e.g. 'Div Rs 46 final + Rs 20 interim' or 'Rs 5,633cr buyback @ Rs 12,000 (open 1-Jul)'. An em dash if none."},
+            "coverage_note": {"type": "string", "description": "Only if coverage is thin or sources conflict AND the sentiment rationale does not already say so; otherwise return an empty string. Never repeat what the rationale states."},
         },
         "required": ["sentiment_rationale", "governance_rationale", "one_line_read", "key_corporate_action", "coverage_note"],
         "additionalProperties": False,
     },
 }
+
+OBS_GUIDE = (
+    " Write exactly 4 portfolio-level observations in this order: (1) sentiment delivery across the book, with counts; "
+    "(2) governance Flags and any shared pattern between them (name the companies, the events, dates); (3) corporate-action "
+    "intensity (buybacks, bonuses, mergers, large raises) and what it means for position management; (4) coverage gaps per stock. "
+    "Each observation has a 'title' that is a short bold lead-in sentence ending in a full stop (e.g. 'Broad delivery is strong.') and "
+    "a 'body' that continues in the same paragraph. Use only the facts supplied."
+)
 
 
 def fmt_sent(x):
@@ -47,14 +70,16 @@ def fmt_sent(x):
 def evidence_payload(s: StockScore, items: list[LabelledItem]) -> dict:
     return {
         "company": s.name, "sector": s.sector,
-        "scores": {"sentiment": s.company_sentiment, "sentiment_unrounded": s.company_sentiment_raw,
-                   "governance": s.governance_score, "governance_label": s.governance_label},
-        "penalties_applied": [{k: p[k] for k in ("event_type", "penalty", "date", "headline")} for p in s.governance_penalties],
+        "scores": {"sentiment": s.company_sentiment, "governance": int(round(s.governance_score)),
+                   "governance_label": s.governance_label.upper() if s.governance_label == "Flag" else s.governance_label},
+        "penalties_applied": [{"event": p["event_type"].replace("_", " "), "penalty": p["penalty"], "date": p["date"],
+                               "headline": p["headline"]} for p in s.governance_penalties],
+        "governance_start": 100,
         "low_confidence": s.low_confidence,
         "evidence": [{"date": li.item.published, "headline": li.item.title, "snippet": li.item.snippet,
-                      "event_type": li.label.event_type, "sentiment": li.label.sentiment,
+                      "event": li.label.event_type.replace("_", " "), "sentiment": li.label.sentiment,
                       "governance_flag": li.label.governance_flag, "historical": li.label.historical,
-                      "rationale": li.label.rationale, "url": li.item.url}
+                      "rationale": li.label.rationale}
                      for li in sorted(items, key=lambda x: x.item.published, reverse=True)],
     }
 
@@ -124,8 +149,7 @@ class AnthropicNarrator:
                     "type": "object", "properties": {"title": {"type": "string"}, "body": {"type": "string"}},
                     "required": ["title", "body"]}}}, "required": ["observations"]}}
         try:
-            return self._call(SYSTEM + " Write 3-5 portfolio-level observations from the facts (distribution, "
-                              "governance flags and patterns, corporate-action intensity, coverage gaps).",
+            return self._call(SYSTEM + OBS_GUIDE,
                               json.dumps(facts, default=str), tool)["observations"]
         except Exception:
             return default_observations(facts)
@@ -139,7 +163,13 @@ def portfolio_facts(scores: list[StockScore], kept: dict[str, list[LabelledItem]
         for li in kept.get(s.symbol, []):
             if li.label.event_type in CA_TYPES:
                 ca[li.label.event_type] += 1
-    return {"n": len(scores), "sentiment_distribution": {str(k): v for k, v in sorted(dist.items(), reverse=True)},
+    companies = [{"company": s.name, "sector": s.sector, "sentiment": s.company_sentiment,
+                  "governance": int(round(s.governance_score)), "label": s.governance_label,
+                  "low_confidence": s.low_confidence,
+                  "penalties": [{"event": p["event_type"].replace("_", " "), "penalty": p["penalty"], "date": p["date"]} for p in s.governance_penalties],
+                  "corporate_actions": [li.item.title for li in kept.get(s.symbol, []) if li.label.event_type in CA_TYPES][:4]}
+                 for s in scores]
+    return {"n": len(scores), "companies": companies, "sentiment_distribution": {str(k): v for k, v in sorted(dist.items(), reverse=True)},
             "flags": [{"company": s.name, "sector": s.sector, "score": s.governance_score,
                        "penalties": [(p["event_type"], p["penalty"], p["date"]) for p in s.governance_penalties]} for s in flags],
             "watch": [s.name for s in scores if s.governance_label == "Watch"],
@@ -149,19 +179,19 @@ def portfolio_facts(scores: list[StockScore], kept: dict[str, list[LabelledItem]
 
 def default_observations(f: dict) -> list[dict]:
     d = f["sentiment_distribution"]
-    obs = [{"title": "Sentiment distribution",
-            "body": f"Of {f['n']} holdings: " + ", ".join(f"{v} at {int(k):+d}" if int(k) else f"{v} at 0" for k, v in d.items()) + "."}]
+    dist = ", ".join(f"{v} at {int(k):+d}" if int(k) else f"{v} at 0" for k, v in d.items())
+    obs = [{"title": "Sentiment distribution.", "body": f"Of {f['n']} holdings: {dist}."}]
     if f["flags"]:
-        obs.append({"title": f"{len(f['flags'])} governance Flag(s)",
-                    "body": "; ".join(f"{x['company']} ({x['sector']}) at {x['score']:g} from " +
+        obs.append({"title": f"{len(f['flags'])} governance Flag(s).",
+                    "body": "; ".join(f"{x['company']} ({x['sector']}) scores {x['score']:g} from " +
                                       ", ".join(f"{t.replace('_', ' ')} {p:+g}" for t, p, _ in x["penalties"]) for x in f["flags"]) + "."})
     else:
-        obs.append({"title": "No governance Flags", "body": "No holding scores below 80."})
+        obs.append({"title": "No governance Flags.", "body": "No holding scores below 80."})
     if f["corporate_action_counts"]:
-        obs.append({"title": "Corporate-action activity",
+        obs.append({"title": "Corporate-action activity.",
                     "body": ", ".join(f"{v} {k.replace('_', ' ')}" for k, v in f["corporate_action_counts"].items()) + " identified in the window."})
     if f["low_confidence"]:
-        obs.append({"title": "Coverage gaps", "body": "Sparse retrieval (low confidence): " + ", ".join(f["low_confidence"]) + "."})
+        obs.append({"title": "Coverage gaps are stated per stock.", "body": "Sparse retrieval (low confidence): " + ", ".join(f["low_confidence"]) + "."})
     return obs
 
 
