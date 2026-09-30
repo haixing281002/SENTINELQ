@@ -350,9 +350,9 @@ def test_gdelt_backs_off_on_429_then_succeeds():
     naps, msgs = [], []
     g = GdeltNews(sleep=naps.append, opener=lambda url, timeout: (_ for _ in ()).throw(seq.pop(0)) if isinstance(seq[0], Exception) else seq.pop(0))
     g.on_event = msgs.append
-    items = g.fetch(Holding("ANGELONE", "Angel One", "BFSI"), date(2025, 7, 1), date(2026, 7, 1))
+    items = g.fetch(Holding("ANGELONE", "Angel One", "BFSI"), date(2026, 6, 20), date(2026, 7, 1))   # one window
     assert len(items) == 1 and items[0].published == "2026-06-01"
-    assert len(msgs) == 2 and "429" in msgs[0]
+    assert len([m for m in msgs if "429" in m]) == 2
     assert 7 in naps or 7.0 in naps                       # honoured Retry-After
     assert g.pause > g.base_pause * 0.9                   # slowed down after being limited
 
@@ -363,7 +363,7 @@ def test_gdelt_plain_text_rate_limit_is_not_read_as_zero_articles():
     from sentinelq.models import Holding
     g = GdeltNews(retries=2, sleep=lambda s: None, opener=lambda url, timeout: _Resp("Please limit requests to one every 5 seconds."))
     with pytest.raises(GdeltRateLimited):
-        g.fetch(Holding("X", "Co X", "S"), date(2025, 7, 1), date(2026, 7, 1))
+        g.fetch(Holding("X", "Co X", "S"), date(2026, 6, 20), date(2026, 7, 1))
 
 
 def _flaky_news(fail_times):
@@ -436,3 +436,153 @@ def test_cache_entry_with_no_news_is_refetched(tmp_path):
                  text_cache=tmp_path / "ft.jsonl")
     raw, _ = p.ingest(hold)
     assert any(i.kind == "news" for i in raw["ANGELONE"])
+
+
+# ---- rolling window: latest N usable articles, stop as soon as N is reached -------------------------------------
+def _doc_opener(per_window):
+    """Fake DOC API: each requested window returns `per_window` articles dated inside that window."""
+    import urllib.parse as up
+    log = []
+
+    def opener(url, timeout=30):
+        q = up.parse_qs(up.urlparse(url).query)
+        lo, hi = q["startdatetime"][0][:8], q["enddatetime"][0][:8]
+        log.append((lo, hi))
+        arts = [{"title": f"Angel One story {hi}-{k}", "url": f"https://x.com/{hi}/{k}", "seendate": hi + "T000000Z", "domain": "x.com"}
+                for k in range(per_window)]
+        return _Resp(json.dumps({"articles": arts}))
+    return opener, log
+
+
+def test_window_rolls_back_only_until_enough_latest_articles():
+    from sentinelq.ingest.gdelt import GdeltNews
+    from sentinelq.ingest.select import count_usable, name_tokens
+    from sentinelq.models import Holding
+    h = Holding("ANGELONE", "Angel One", "BFSI")
+    opener, log = _doc_opener(per_window=20)
+    g = GdeltNews(slice_days=30, sleep=lambda s: None, opener=opener)
+    toks = name_tokens(h)
+    g.stop_when = lambda its: count_usable(its, toks) >= 50
+    items = g.fetch(h, date(2025, 7, 3), date(2026, 7, 3))
+    assert len(log) == 3 and len(items) == 60                       # 20+20+20: stopped as soon as >= 50 was in hand
+    assert log[0][1] == "20260703" and log[1][1] < log[0][0]          # newest window first, then rolled back
+    assert all(lo >= "20260403" for lo, _ in log)                    # never went further back than needed
+
+
+def test_window_covers_full_lookback_when_articles_are_scarce():
+    from sentinelq.ingest.gdelt import GdeltNews
+    from sentinelq.models import Holding
+    opener, log = _doc_opener(per_window=1)
+    g = GdeltNews(slice_days=30, sleep=lambda s: None, opener=opener)
+    g.stop_when = lambda its: len(its) >= 50
+    items = g.fetch(Holding("X", "Angel One", "S"), date(2025, 7, 3), date(2026, 7, 3))
+    assert len(log) >= 12 and len(items) == len(log)                # kept rolling back across the whole 12 months
+
+
+def test_select_keeps_the_latest_usable_articles():
+    from sentinelq.ingest.select import name_tokens, select_articles
+    from sentinelq.models import Holding, RawItem
+    h = Holding("BAJFINANCE", "Bajaj Finance", "BFSI")
+    mk = lambda t, d, k=0: RawItem("BAJFINANCE", "news", t, "", f"https://x.com/{d}/{k}", d, "x.com")
+    items = [mk(f"Bajaj Finance update {d}", d) for d in ("2026-01-05", "2026-06-20", "2026-06-25", "2026-05-01", "2026-06-30")]
+    items += [mk("Sensex ends lower", "2026-07-01"), mk("Nifty rallies today", "2026-07-02")]     # newest, but not usable
+    out = select_articles(items, 3, name_tokens(h))
+    assert [i.published for i in out] == ["2026-06-30", "2026-06-25", "2026-06-20"]               # latest 3 usable
+    assert select_articles(items, None, name_tokens(h))[0].published == "2026-07-02"              # no cap: everything
+
+
+def test_pipeline_wires_stop_condition_and_caps_to_latest(tmp_path):
+    from sentinelq.ingest.gdelt import GdeltNews
+    r = load_rubric()
+    hold = load_portfolio(ROOT / "examples" / "portfolio.csv")[:1]        # ANGELONE
+    opener, log = _doc_opener(per_window=30)
+    g = GdeltNews(slice_days=30, sleep=lambda s: None, opener=opener)
+    p = Pipeline(r, g, None, None, KeywordClassifier(), tmp_path / "o", tmp_path / "c.jsonl", date(2026, 7, 3),
+                 max_articles=50, text_cache=tmp_path / "ft.jsonl")
+    raw, _ = p.ingest(hold)
+    news = [i for i in raw["ANGELONE"] if i.kind == "news"]
+    assert len(news) == 50 and len(log) == 2                              # 30+30 collected, then trimmed to 50
+    assert news[0].published >= news[-1].published and news[0].published.startswith("2026-07")   # latest first
+    assert min(i.published for i in news) >= "2026-05-01"                 # did not reach back further than needed
+
+
+# ---- BigQuery route (fake client: SQL, cost gate, row conversion, relevance) ------------------------------------
+class _Job:
+    def __init__(self, gb=0, rows=()):
+        self.total_bytes_processed = int(gb * 1e9)
+        self._rows = list(rows)
+    def result(self):
+        return self._rows
+
+
+class _FakeBQ:
+    def __init__(self, gb, rows):
+        self.gb, self.rows, self.calls = gb, rows, []
+    def query(self, sql, job_config=None):
+        dry = bool(getattr(job_config, "dry_run", False))
+        self.calls.append(("dry" if dry else "run", sql, job_config))
+        return _Job(self.gb) if dry else _Job(self.gb, self.rows)
+
+
+def _bq_rows():
+    r = lambda sym, url, title, pub, m, it: {"symbol": sym, "url": url, "source": "x.com", "title": title, "published": pub,
+                                             "mentions": m, "in_title": it}
+    return [r("ANGELONE", "https://x.com/a", "Angel One &amp; SEBI: settlement", "20260615093000", 5, True),
+            r("ANGELONE", "https://x.com/a/", "duplicate url", "20260615093000", 2, False),
+            r("ANGELONE", "https://x.com/b", "Broking sector outlook", "20260601000000", 3, False),
+            r("TITAN", "https://x.com/t", "Titan Company Q4 results", "20260510000000", 4, True)]
+
+
+def test_bigquery_sql_is_correct_and_scoped():
+    from sentinelq.ingest.bq import GdeltBigQuery
+    hold = [h for h in load_portfolio(ROOT / "examples" / "portfolio.csv") if h.symbol == "ANGELONE"]
+    hold[0].aliases = "Angel One|Angel One Ltd"
+    sql = GdeltBigQuery(client=_FakeBQ(1, [])).build_sql(hold, date(2025, 7, 3), date(2026, 7, 3))
+    assert "gdelt-bq.gdeltv2.gkg_partitioned" in sql
+    assert "_PARTITIONTIME >= TIMESTAMP('2025-07-03')" in sql and "_PARTITIONTIME < TIMESTAMP('2026-07-04')" in sql
+    assert "PAGE_TITLE" in sql and "V2Organizations" in sql and "angel one" in sql.lower()
+    assert "(?:^|;)" in sql                     # exact org-name match, not a substring of another firm
+    assert ">= 2" in sql                        # min mentions unless the company is in the title
+
+
+def test_bigquery_cost_gate_blocks_before_spending(tmp_path):
+    import pytest
+    from sentinelq.ingest.bq import BigQueryTooExpensive, GdeltBigQuery
+    hold = load_portfolio(ROOT / "examples" / "portfolio.csv")[:1]
+    fake = _FakeBQ(gb=900, rows=_bq_rows())
+    bq = GdeltBigQuery(max_gb=300, client=fake, cache_dir=tmp_path)
+    with pytest.raises(BigQueryTooExpensive, match="900 GB"):
+        bq.prefetch(hold, date(2025, 7, 3), date(2026, 7, 3))
+    assert [c[0] for c in fake.calls] == ["dry"]          # the paid query never ran
+
+
+def test_bigquery_rows_become_ranked_deduped_articles_and_are_cached(tmp_path):
+    from sentinelq.ingest.bq import GdeltBigQuery
+    hold = load_portfolio(ROOT / "examples" / "portfolio.csv")[:1]
+    fake = _FakeBQ(gb=120, rows=_bq_rows())
+    bq = GdeltBigQuery(max_gb=300, client=fake, cache_dir=tmp_path)
+    bq.prefetch(hold, date(2025, 7, 3), date(2026, 7, 3))
+    items = bq.fetch(hold[0], date(2025, 7, 3), date(2026, 7, 3))
+    assert [c[0] for c in fake.calls] == ["dry", "run"]
+    assert getattr(fake.calls[1][2], "maximum_bytes_billed") <= 301 * 10**9        # hard billing cap on the real job
+    assert len(items) == 2                                                          # trailing-slash duplicate removed
+    a = next(i for i in items if i.url.endswith("/a"))
+    assert a.title == "Angel One & SEBI: settlement" and a.published == "2026-06-15"      # html unescaped, ISO date
+    assert a.relevance == 10.0 and next(i for i in items if i.url.endswith("/b")).relevance == 3.0   # title hit ranks higher
+    fake2 = _FakeBQ(gb=120, rows=[])
+    bq2 = GdeltBigQuery(max_gb=300, client=fake2, cache_dir=tmp_path)
+    bq2.prefetch(hold, date(2025, 7, 3), date(2026, 7, 3))
+    assert fake2.calls == [] and len(bq2.fetch(hold[0], date(2025, 7, 3), date(2026, 7, 3))) == 2   # re-run: cache, no cost
+
+
+def test_bigquery_through_pipeline_keeps_latest_articles(tmp_path):
+    from sentinelq.ingest.bq import GdeltBigQuery
+    r = load_rubric()
+    hold = load_portfolio(ROOT / "examples" / "portfolio.csv")[:1]
+    rows = [{"symbol": "ANGELONE", "url": f"https://x.com/{k}", "source": "x.com", "title": f"Angel One item {k}",
+             "published": f"2026{(k % 12) + 1:02d}15000000", "mentions": 3, "in_title": True} for k in range(80)]
+    p = Pipeline(r, GdeltBigQuery(client=_FakeBQ(10, rows), cache_dir=tmp_path / "bq"), None, None, KeywordClassifier(),
+                 tmp_path / "o", tmp_path / "c.jsonl", date(2026, 12, 31), max_articles=50, text_cache=tmp_path / "ft.jsonl")
+    raw, _ = p.ingest(hold)
+    news = [i for i in raw["ANGELONE"] if i.kind == "news"]
+    assert len(news) == 50 and news == sorted(news, key=lambda i: i.published, reverse=True)

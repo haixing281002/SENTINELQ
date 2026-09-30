@@ -50,3 +50,6 @@ Quick run for typed names: `sentinelq --pick "Angel One, Titan Company"` (resolv
 score text `#2e7d5b #4a8f6d #a97528 #9b2f35`). A test compares pages 1-2 against the reference coordinates.
 Deliberate fixes vs the reference: rupee shown as "Rs" (the reference printed black boxes), no mid-word wraps
 ("Lookbac/k", "Larg/e"), true minus signs.
+
+## News retrieval
+Rolling window: newest first, stop at the latest 50 usable articles per stock, 12-month max. Routes: `--news gdelt` (DOC API, month-by-month) or `--news gdelt-bq` (Google BigQuery, recommended). Details, limits and cost controls: `docs/GDELT.md`.

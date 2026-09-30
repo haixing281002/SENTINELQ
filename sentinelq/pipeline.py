@@ -18,6 +18,7 @@ from concurrent.futures import ThreadPoolExecutor
 from .narrate import TemplateNarrator, portfolio_facts
 from .progress import Display
 from .style import classify_style
+from .ingest.select import count_usable, month_spark, name_tokens, select_articles
 from .pdf import build_pdf
 from .report import write_reports
 from .rubric import Rubric
@@ -38,7 +39,7 @@ def load_portfolio(path: str | Path) -> list[Holding]:
             raise ValueError(f"portfolio needs columns {sorted(need)}; got {rd.fieldnames}")
         opt = lambda r, k: (r.get(cols[k]) or "").strip() if k in cols else ""
         return [Holding(r[cols["symbol"]].strip(), r[cols["name"]].strip(), r[cols["sector"]].strip(),
-                        opt(r, "cap"), opt(r, "weight"))
+                        opt(r, "cap"), opt(r, "weight"), opt(r, "aliases"))
                 for r in rd if r[cols["symbol"]].strip()]
 
 
@@ -66,20 +67,7 @@ def pick_holdings(universe: str | Path, queries: list[str]) -> list[Holding]:
     if missing:
         raise SystemExit("Cannot resolve: " + "; ".join(missing) +
                          f". Add a row (symbol,name,sector,cap,weight,aliases) to {universe} and retry.")
-    return [Holding(h.symbol, h.name, h.sector, h.cap, "") for h in out]
-
-
-_GENERIC = {"india", "indian", "ltd", "limited", "company", "co", "corp", "corporation", "industries", "industry", "the", "and",
-            "of", "bank", "laboratories", "pharma", "pharmaceuticals", "motors", "finance", "financial", "technologies", "engineering",
-            "asset", "management", "services", "small", "forgings", "precision", "automation", "life", "power"}
-
-
-def name_tokens(h: Holding) -> list[str]:
-    """Words that identify the company in a headline (symbol and distinctive name words)."""
-    import re
-    words = [w for w in re.findall(r"[a-z0-9&']+", h.name.lower()) if len(w) >= 2]
-    distinct = [w for w in words if w not in _GENERIC] or words
-    return list({*distinct, re.sub(r"[^a-z0-9]", "", h.symbol.lower()), h.name.lower()})
+    return [Holding(h.symbol, h.name, h.sector, h.cap, "", h.aliases) for h in out]
 
 
 class Pipeline:
@@ -110,6 +98,9 @@ class Pipeline:
     def _fetch_stock(self, h):
         w = self.r["windows"]
         items, errs = [], []
+        toks = name_tokens(h)
+        if hasattr(self.news, "stop_when"):   # roll the window back only until we hold enough usable, latest articles
+            self.news.stop_when = (lambda its: count_usable(its, toks) >= self.max_articles) if self.max_articles else None
         for prov, days in ((self.news, w["news_days"]), (self.actions, w["actions_days"])):
             if prov is None:
                 continue
@@ -118,9 +109,8 @@ class Pipeline:
             except Exception as e:  # a provider failure must be visible, not fatal
                 errs.append({"symbol": h.symbol, "provider": type(prov).__name__, "error": repr(e)})
         found = len([i for i in items if i.kind == "news"])
-        if self.max_articles:   # cap news per company, newest first; actions are never capped
-            news = sorted((i for i in items if i.kind == "news"), key=lambda i: i.published, reverse=True)
-            items = news[:self.max_articles] + [i for i in items if i.kind != "news"]
+        # rank by how much each article is about the company; cap spread across the months of the lookback
+        items = select_articles(items, self.max_articles, name_tokens(h))
         return items, found, errs
 
     def _finish_items(self, items):
@@ -137,12 +127,19 @@ class Pipeline:
         errors: list[dict] = []
         icache = Path(self.text_cache).parent / "ingest"
         n = len(holdings)
+        w_days = self.r["windows"]["news_days"]
         failed: list = []
+        if hasattr(self.news, "prefetch"):
+            todo = [h for h in holdings if not (icache / f"{self.as_of}_{h.symbol}_{self.max_articles}.json").exists()]
+            if todo:
+                ui.note(f"  {type(self.news).__name__}: fetching all {len(todo)} companies in one request ...", "d")
+                self.news.prefetch(todo, self.as_of - timedelta(days=w_days), self.as_of)
 
         def show(idx, h, items, found, err_txt, from_cache, secs):
             nn = [i for i in items if i.kind == "news"]
             ui.ingest_stock(idx, n, h, found, len(nn), len(items) - len(nn), Counter(i.style for i in nn),
-                            from_cache, err_txt, secs, self.max_articles)
+                            from_cache, err_txt, secs, self.max_articles,
+                            month_spark(items, self.as_of - timedelta(days=w_days), self.as_of, ui.ascii))
 
         for idx, h in enumerate(holdings, 1):
             t0 = time.time()

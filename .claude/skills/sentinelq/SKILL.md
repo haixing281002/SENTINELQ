@@ -15,7 +15,8 @@ Never invent or hand-adjust a score. To change a score, change the rubric (and s
    (Yahoo form = ticker + `.NS`), the company name as used in news, sector and cap, **confirm with the user if unsure**,
    append a row to `portfolio/universe.csv`, and retry. Weights are never needed (they don't affect any score); the Wt/Cap columns
    appear in the PDF only if the user supplies them in a `--portfolio` CSV.
-2. **Run** (no API key needed; uses the logged-in `claude` CLI):
+2. **Run** (no API key needed; uses the logged-in `claude` CLI). News rule: roll the window back from the as-of date and stop
+   at the latest 50 usable articles per stock (12-month max) - see `docs/GDELT.md`; prefer `--news gdelt-bq --bq-project <id>` for accuracy:
    ```bash
    pip install -e ".[prices]"      # first time only
    sentinelq --pick "<names>" --max-articles 50 --fetch-text \

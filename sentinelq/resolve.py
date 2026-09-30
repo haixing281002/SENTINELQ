@@ -76,12 +76,16 @@ def enrich(holdings: list[Holding], universe="portfolio/universe.csv", cache=".c
     cached = json.loads(cpath.read_text()) if cpath.exists() else {}
     for h in holdings:
         if h.sector:
+            if not h.aliases and h.symbol in uni:
+                h.aliases = uni[h.symbol].get("aliases", "") or ""
             continue
         row = uni.get(h.symbol) or cached.get(h.symbol)
         if row:
             h.sector, h.cap = row["sector"], row.get("cap", "")
             if h.symbol in uni and uni[h.symbol].get("name"):
                 h.name = uni[h.symbol]["name"]
+        if not h.aliases and h.symbol in uni:
+            h.aliases = uni[h.symbol].get("aliases", "") or ""
     unknown = [h for h in holdings if not h.sector]
     if unknown and mode == "claude-code":
         try:

@@ -8,6 +8,7 @@ dependencies = ["openpyxl>=3.1"]
 [project.optional-dependencies]
 llm = ["anthropic>=0.40"]
 prices = ["yfinance>=0.2"]
+bq = ["google-cloud-bigquery>=3.0"]
 dev = ["pytest", "pymupdf"]
 
 [project.scripts]

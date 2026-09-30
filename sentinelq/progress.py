@@ -148,13 +148,15 @@ class Display:
 
     # ---- ingest -------------------------------------------------------------------------------------------
     def ingest_stock(self, idx: int, n: int, h, found: int, kept: int, actions: int, styles: Counter,
-                     from_cache: bool, errors: list[str], secs: float, cap: int | None = None) -> None:
+                     from_cache: bool, errors: list[str], secs: float, cap: int | None = None, spark=None) -> None:
         self.counts["articles"] += kept
         head = f"[{idx:>2}/{n}] {h.symbol:<12} {h.name}  ({h.sector}{' - ' + h.cap if h.cap else ''})"
         self.line(head, "B")
         cap_note = f" (capped from {found})" if found > kept else ""
         src = "cache" if from_cache else f"{secs:.1f}s"
         self.line(f"        news    {self._bar(kept, cap or max(found, kept, 1), 20)} {kept} articles{cap_note}  [{src}]")
+        if spark:
+            self.line(f"        months  [{spark[0]}]  {spark[1]}", "d")
         if styles:
             self.line("        styles  " + " | ".join(f"{k} {v}" for k, v in styles.most_common()), "d")
         if actions:

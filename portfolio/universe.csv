@@ -1,30 +1,30 @@
 symbol,name,sector,cap,weight,aliases
-BAJFINANCE,Bajaj Finance,BFSI,Large,,
-POLYCAB,Polycab India,Consumption,Large,,
-MAHABANK,Bank of Maharashtra,Bank,Mid,,
-CUMMINSIND,Cummins India,Autos,Large,,
-BAJAJ-AUTO,Bajaj Auto,Autos,Large,,
-EICHERMOT,Eicher Motors,Autos,Large,,
-KAJARIACER,Kajaria Ceramics,Infra,Small,,
-LALPATHLAB,Dr. Lal PathLabs,Healthcare,Small,,
-NAM-INDIA,Nippon Life India Asset Management,BFSI,Mid,,
-HINDCOPPER,Hindustan Copper,Metals & Mining,Small,,
-NMDC,NMDC,Metals & Mining,Mid,,
-NATIONALUM,National Aluminium,Metals & Mining,Mid,,
-NESTLEIND,Nestle India,FMCG,Large,,
-AIAENG,AIA Engineering,Autos,Small,,
-AUBANK,AU Small Finance Bank,Bank,Mid,,
-CANBK,Canara Bank,Bank,Large,,
-GRINDWELL,Grindwell Norton,Capital Goods,Small,,
-HONAUT,Honeywell Automation India,Consumption,Small,,
-MARICO,Marico,FMCG,Mid,,
-SONACOMS,Sona BLW Precision Forgings,Autos,Small,,
-TITAN,Titan Company,Consumption,Large,,
-MARUTI,Maruti Suzuki India,Autos,Large,,
-BOSCHLTD,Bosch,Autos,Large,,
-3MINDIA,3M India,Diversified,Large,,
-COALINDIA,Coal India,Metals & Mining,Large,,
-DRREDDY,Dr. Reddy's Laboratories,Healthcare,Large,,
-ZENTEC,Zen Technologies,Capital Goods,Small,,
-ANGELONE,Angel One,BFSI,Small,,
-NATCOPHARM,Natco Pharma,Healthcare,Small,,
+BAJFINANCE,Bajaj Finance,BFSI,Large,,Bajaj Finance|Bajaj Finance Ltd
+POLYCAB,Polycab India,Consumption,Large,,Polycab India|Polycab
+MAHABANK,Bank of Maharashtra,Bank,Mid,,Bank of Maharashtra
+CUMMINSIND,Cummins India,Autos,Large,,Cummins India
+BAJAJ-AUTO,Bajaj Auto,Autos,Large,,Bajaj Auto|Bajaj Auto Ltd
+EICHERMOT,Eicher Motors,Autos,Large,,Eicher Motors
+KAJARIACER,Kajaria Ceramics,Infra,Small,,Kajaria Ceramics
+LALPATHLAB,Dr. Lal PathLabs,Healthcare,Small,,Dr. Lal PathLabs|Dr Lal PathLabs|Dr Lal Path Labs|Lal PathLabs
+NAM-INDIA,Nippon Life India Asset Management,BFSI,Mid,,Nippon Life India Asset Management|Nippon Life India AMC|Nippon Life AMC
+HINDCOPPER,Hindustan Copper,Metals & Mining,Small,,Hindustan Copper
+NMDC,NMDC,Metals & Mining,Mid,,NMDC|NMDC Ltd
+NATIONALUM,National Aluminium,Metals & Mining,Mid,,National Aluminium Company|National Aluminium|NALCO
+NESTLEIND,Nestle India,FMCG,Large,,Nestle India|Nestle India Ltd
+AIAENG,AIA Engineering,Autos,Small,,AIA Engineering
+AUBANK,AU Small Finance Bank,Bank,Mid,,AU Small Finance Bank|AU Bank
+CANBK,Canara Bank,Bank,Large,,Canara Bank
+GRINDWELL,Grindwell Norton,Capital Goods,Small,,Grindwell Norton
+HONAUT,Honeywell Automation India,Consumption,Small,,Honeywell Automation India|Honeywell Automation
+MARICO,Marico,FMCG,Mid,,Marico|Marico Ltd
+SONACOMS,Sona BLW Precision Forgings,Autos,Small,,Sona BLW Precision Forgings|Sona Comstar|Sona BLW
+TITAN,Titan Company,Consumption,Large,,Titan Company|Titan Co|Titan Industries
+MARUTI,Maruti Suzuki India,Autos,Large,,Maruti Suzuki India|Maruti Suzuki
+BOSCHLTD,Bosch,Autos,Large,,Bosch Ltd|Bosch Limited|Bosch India
+3MINDIA,3M India,Diversified,Large,,3M India|3M India Ltd
+COALINDIA,Coal India,Metals & Mining,Large,,Coal India|Coal India Ltd|Coal India Limited
+DRREDDY,Dr. Reddy's Laboratories,Healthcare,Large,,Dr. Reddy's Laboratories|Dr Reddys Laboratories|Dr. Reddy's|Dr Reddy's|Dr Reddys
+ZENTEC,Zen Technologies,Capital Goods,Small,,Zen Technologies|Zen Technologies Ltd
+ANGELONE,Angel One,BFSI,Small,,Angel One|Angel One Ltd
+NATCOPHARM,Natco Pharma,Healthcare,Small,,Natco Pharma|Natco Pharma Ltd

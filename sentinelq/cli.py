@@ -20,7 +20,11 @@ def main(argv=None):
     p.add_argument("--classifier", choices=["claude-code", "file", "anthropic", "keyword"], default="claude-code",
                    help="claude-code: local `claude -p`, no API key (default); file: hand-off files; anthropic: API key; keyword: offline stub")
     p.add_argument("--model", default=None, help="Anthropic model id (or env SENTINELQ_MODEL)")
-    p.add_argument("--news", choices=["gdelt", "file"], default="gdelt")
+    p.add_argument("--news", choices=["gdelt", "gdelt-bq", "file"], default="gdelt",
+                   help="gdelt = DOC API, month-by-month (no login, slow); gdelt-bq = Google BigQuery (best: full year, ranked by relevance)")
+    p.add_argument("--bq-project", default=None, help="Google Cloud project id billed for BigQuery (or env GOOGLE_CLOUD_PROJECT)")
+    p.add_argument("--bq-max-gb", type=float, default=300.0, help="abort BigQuery if the dry run exceeds this many GB (hard cap on cost)")
+    p.add_argument("--gdelt-slice-days", type=int, default=30, help="DOC API window size; smaller = more complete, slower")
     p.add_argument("--news-file")
     p.add_argument("--actions", choices=["yahoo", "file", "none"], default="yahoo")
     p.add_argument("--actions-file")
@@ -50,9 +54,13 @@ def main(argv=None):
 
     if a.news == "file":
         news = FileNews(a.news_file)
+    elif a.news == "gdelt-bq":
+        import os
+        from .ingest.bq import GdeltBigQuery
+        news = GdeltBigQuery(a.bq_project or os.environ.get("GOOGLE_CLOUD_PROJECT"), a.bq_max_gb)
     else:
         from .ingest.gdelt import GdeltNews
-        news = GdeltNews(max_records=max(a.max_articles or 100, 1))
+        news = GdeltNews(slice_days=a.gdelt_slice_days)
     if a.actions == "file":
         actions = FileActions(a.actions_file)
     elif a.actions == "yahoo":
