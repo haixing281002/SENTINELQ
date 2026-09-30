@@ -146,3 +146,14 @@ def test_pick_by_name(tmp_path):
     assert [x.symbol for x in h] == ["ANGELONE", "TITAN"] and h[0].weight == ""
     with pytest.raises(SystemExit):
         pick_holdings(u, ["Nonexistent Corp"])
+
+
+def test_given_table_parses_and_resolves():
+    from sentinelq.resolve import enrich
+    h = enrich(load_portfolio(ROOT / "portfolio" / "stocks_given.tsv"), mode="none")
+    assert len(h) == 29
+    assert all(x.sector != "Unclassified" for x in h)
+    m = {x.symbol: x for x in h}
+    assert "TITAN" in m and "NSE:TITAN" not in m          # exchange prefix stripped
+    assert m["NATIONALUM"].name == "National Aluminium"    # legal suffixes cleaned
+    assert m["ANGELONE"].sector == "BFSI" and m["ANGELONE"].cap == "Small"

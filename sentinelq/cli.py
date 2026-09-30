@@ -97,6 +97,8 @@ def main(argv=None):
         p.error("give --portfolio or --pick")
     pipe = Pipeline(r, news, actions, prices, clf, out, a.cache, as_of, a.mode,
                     narrator, a.title, a.coverage, a.max_articles, a.fetch_text)
+    from .resolve import enrich
+    holdings = enrich(holdings, a.universe, mode="none" if a.classifier in ("keyword", "file") else "claude-code", model=a.model)
     ingested = None
     if a.classifier == "file":
         ingested = pipe.ingest(holdings)

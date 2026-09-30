@@ -20,6 +20,10 @@ from .validate import validate_label
 
 
 def load_portfolio(path: str | Path) -> list[Holding]:
+    from .resolve import looks_like_table, parse_stock_table
+    txt = Path(path).read_text(encoding="utf-8-sig")
+    if looks_like_table(txt) and "sector" not in txt.splitlines()[0].lower():
+        return parse_stock_table(txt)   # pasted CD_NSE Symbol / ISIN / Company Name table
     with open(path, newline="", encoding="utf-8-sig") as f:
         rd = csv.DictReader(f)
         cols = {c.strip().lower(): c for c in rd.fieldnames or []}
