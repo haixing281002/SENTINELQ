@@ -50,3 +50,23 @@ one_line_read, key_corporate_action, coverage_note}, "_observations": [{title, b
 * Items the model could not label are reported as `label_failed: <reason>` (never as "irrelevant"), listed in
   `label_failures.jsonl`, and counted on the Coverage sheet. If more than 10% fail the run refuses to write a report
   (override with `--allow-partial-labels`). Tune with `--batch-size 4 --workers 1` if you keep hitting limits.
+
+## Following a long run (progress display)
+The run prints six stage banners and, for every stock, what it found and how it will be read:
+```
+[ 3/29] DRREDDY  Dr. Reddy's Laboratories  (Healthcare - Large)
+        news    ████████████████████ 50 articles (capped from 73)  [6.2s]
+        styles  market-roundup 14 | general-news 12 | broker-note 9 | results 6 | press-release 5 | exchange-filing 4
+Labelling ████████░░░░░░░░░░░░░░░░ 142/338  ok 140  failed 2  now: DRREDDY  ETA 6m12s
+    DRREDDY  broker-note   full-text 1.8k > analyst_action  +1      "Dr Reddy's upgraded by Jefferies, target..."
+    DRREDDY  exchange-filing headline    > regulatory_action -2 GOV  "USFDA issues observations at Srikakulam"
+  ✔ DRREDDY finished labelling
+```
+* **Style** = what kind of article (exchange-filing, press-release, market-roundup, broker-note, results,
+  corporate-action, opinion-feature, business-news, general-news). Descriptive only; it never feeds a score.
+* **Parse** = how it was read: `full-text 1.8k` (body fetched with `--fetch-text`) or `headline` (title only).
+* Then per stock: kept vs dropped with reasons, then the score table, commentary progress and output paths.
+* `--progress auto|live|plain|off`: `live` redraws one bar line (real terminal); `plain` prints line by line (used
+  automatically when output is captured, e.g. inside Claude Code). `--ascii` for terminals that garble block characters.
+* Every run also writes `work/run.log` (plain text) and `work/progress.json` (machine-readable snapshot). From a second
+  terminal: `tail -f work/run.log`. Inside Claude Code, ask it to run the command in the background and tail that log.

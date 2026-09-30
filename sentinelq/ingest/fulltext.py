@@ -29,19 +29,25 @@ def fetch_text(url: str, limit: int = 1800, timeout: int = 12) -> str:
         return ""
 
 
-def enrich(items, cache_path: str | Path, workers: int = 8):
+def enrich(items, cache_path: str | Path, workers: int = 8, progress=None):
     """Fill item.snippet with body text for news items lacking one. Cached by URL."""
     p = Path(cache_path)
     cache = {}
     if p.exists():
-        cache = {json.loads(l)["url"]: json.loads(l)["text"] for l in p.read_text().splitlines() if l.strip()}
+        cache = {json.loads(l)["url"]: json.loads(l)["text"] for l in p.read_text(encoding="utf-8").splitlines() if l.strip()}
     todo = [i for i in items if i.kind == "news" and not i.snippet and i.url and i.url not in cache]
     with ThreadPoolExecutor(workers) as ex:
-        for i, t in zip(todo, ex.map(lambda i: fetch_text(i.url), todo)):
+        for n, (i, t) in enumerate(zip(todo, ex.map(lambda i: fetch_text(i.url), todo)), 1):
             cache[i.url] = t
             p.parent.mkdir(parents=True, exist_ok=True)
-            with p.open("a") as f:
-                f.write(json.dumps({"url": i.url, "text": t}) + "\n")
+            with p.open("a", encoding="utf-8") as f:
+                f.write(json.dumps({"url": i.url, "text": t}, ensure_ascii=False) + "\n")
+            if progress:
+                progress(n, len(todo))
     for i in items:
-        if i.kind == "news" and not i.snippet:
-            i.snippet = cache.get(i.url, "")
+        if i.kind == "news":
+            if not i.snippet:
+                i.snippet = cache.get(i.url, "")
+                i.parse = f"full-text {len(i.snippet) / 1000:.1f}k" if i.snippet else "headline-only (no text)"
+            else:
+                i.parse = i.parse or f"full-text {len(i.snippet) / 1000:.1f}k"

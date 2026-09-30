@@ -137,6 +137,8 @@ class ClaudeCodeClassifier:
         self._res: dict[str, tuple[dict, str]] = {}
         self.errors: dict[str, str] = {}       # item id -> why it could not be labelled
         self.on_label = None                   # callback(item, label_dict, raw): persists labels as they arrive
+        self.on_fail = None                    # callback(item, error_text)
+        self.say = lambda msg, bad=False: print(msg)
         self.abort = False
         self.log_path = Path(log_path)
         self._lock = threading.Lock()
@@ -196,6 +198,8 @@ class ClaudeCodeClassifier:
             return
         if len(missing) == 1:
             self.errors[item_id(missing[0][0])] = err or "model returned no label"
+            if self.on_fail:
+                self.on_fail(missing[0][0], self.errors[item_id(missing[0][0])])
             return
         if len(missing) == len(pairs):            # nothing came back: split
             mid = len(missing) // 2
@@ -207,14 +211,9 @@ class ClaudeCodeClassifier:
     def prefetch(self, pairs: list[tuple[RawItem, str]]):
         todo = [(i, c) for i, c in pairs if item_id(i) not in self._res]
         batches = [todo[k:k + self.bs] for k in range(0, len(todo), self.bs)]
-        print(f"  [claude-code] labelling {len(todo)} items in {len(batches)} batches "
-              f"(batch={self.bs}, workers={self.workers}); log: {self.log_path}")
-        done = 0
+        self.say(f"{len(todo)} items in {len(batches)} batches (batch={self.bs}, workers={self.workers}); call log: {self.log_path}")
         with ThreadPoolExecutor(self.workers) as ex:
-            for _ in ex.map(self._label_batch, batches):
-                done += 1
-                if done % 5 == 0 or done == len(batches):
-                    print(f"  [claude-code] {done}/{len(batches)} batches, {len(self._res)} labels, {len(self.errors)} failed")
+            list(ex.map(self._label_batch, batches))
         if self.abort:
             raise LabellingAborted("Claude Code kept returning rate-limit/usage errors, so labelling stopped. "
                                    f"{len(self._res)} labels are saved in the cache; re-run the same command later to resume "
@@ -224,8 +223,7 @@ class ClaudeCodeClassifier:
             raise RuntimeError("Model labelling failed for every item - refusing to write an empty report.\n"
                                f"First error: {first}\nFull per-batch log: {self.log_path}")
         if self.errors:
-            print(f"  [claude-code] WARNING: {len(self.errors)}/{len(todo)} items could not be labelled "
-                  f"(reasons in {self.log_path})")
+            self.say(f"WARNING: {len(self.errors)}/{len(todo)} items could not be labelled (reasons in {self.log_path})", True)
 
     def classify(self, item, company):
         iid = item_id(item)

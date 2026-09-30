@@ -25,6 +25,8 @@ class RawItem:
     source: str = ""
     # Pre-labelled structured actions (dividends/splits) skip the LLM.
     prelabel: dict | None = None
+    style: str = ""        # article style (descriptive only, see style.py)
+    parse: str = ""        # how the text was read: headline-only | full-text Nc | fetch-failed
 
 
 @dataclass

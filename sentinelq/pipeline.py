@@ -11,7 +11,13 @@ from .cache import LabelCache, item_key
 from .classify import PROMPT_VERSION, Classifier, to_label
 from .context import price_context
 from .models import Dropped, Holding, Label, LabelledItem, RawItem
+import time
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
+
 from .narrate import TemplateNarrator, portfolio_facts
+from .progress import Display
+from .style import classify_style
 from .pdf import build_pdf
 from .report import write_reports
 from .rubric import Rubric
@@ -70,7 +76,7 @@ class Pipeline:
                  narrator=None, title: str = "Portfolio", coverage: str = "",
                  max_articles: int | None = None, fetch_text: bool = False,
                  max_label_failure: float = 0.10,
-                 text_cache: str | Path = ".cache/fulltext.jsonl"):
+                 text_cache: str | Path = ".cache/fulltext.jsonl", ui: Display | None = None):
         self.r, self.news, self.actions, self.prices, self.clf = rubric, news, actions, prices, classifier
         self.out = Path(out_dir)
         self.cache = LabelCache(cache_path)
@@ -81,37 +87,61 @@ class Pipeline:
         self.fetch_text, self.text_cache = fetch_text, text_cache
         self.narrator = narrator or TemplateNarrator()
         self.meta = {"title": title, "coverage": coverage}
+        self.ui = ui or Display("off")
 
     # -- Stage 2 --------------------------------------------------------------------
     def ingest(self, holdings):
+        ui = self.ui
+        ui.stage("Ingest", "news + corporate actions per stock, deduplicated by URL")
         w = self.r["windows"]
         raw: dict[str, list[RawItem]] = {}
         errors = []
         icache = Path(self.text_cache).parent / "ingest"
-        for h in holdings:
+        n = len(holdings)
+        for idx, h in enumerate(holdings, 1):
+            t0 = time.time()
             ck = icache / f"{self.as_of}_{h.symbol}_{self.max_articles}.json"
+            from_cache, found, err_txt = False, 0, []
             if ck.exists():                      # already fetched for this date/cap: don't hit GDELT again
-                raw[h.symbol] = [RawItem(**d) for d in json.loads(ck.read_text())]
-                continue
-            n_err = len(errors)
-            items: list[RawItem] = []
-            for prov, days in ((self.news, w["news_days"]), (self.actions, w["actions_days"])):
-                if prov is None:
-                    continue
-                try:
-                    items += prov.fetch(h, self.as_of - timedelta(days=days), self.as_of)
-                except Exception as e:  # a provider failure must be visible, not fatal
-                    errors.append({"symbol": h.symbol, "provider": type(prov).__name__, "error": repr(e)})
-            if self.max_articles:   # cap news per company, newest first; actions are never capped
-                news = sorted((i for i in items if i.kind == "news"), key=lambda i: i.published, reverse=True)
-                items = news[:self.max_articles] + [i for i in items if i.kind != "news"]
+                items = [RawItem(**d) for d in json.loads(ck.read_text(encoding="utf-8"))]
+                found, from_cache = len([i for i in items if i.kind == "news"]), True
+            else:
+                n_err = len(errors)
+                items = []
+                ui.status(f"Ingest {idx}/{n}  {h.symbol}: fetching news ...", "ingest", idx - 1, n)
+                for prov, days in ((self.news, w["news_days"]), (self.actions, w["actions_days"])):
+                    if prov is None:
+                        continue
+                    try:
+                        items += prov.fetch(h, self.as_of - timedelta(days=days), self.as_of)
+                    except Exception as e:  # a provider failure must be visible, not fatal
+                        errors.append({"symbol": h.symbol, "provider": type(prov).__name__, "error": repr(e)})
+                        err_txt.append(f"{type(prov).__name__}: {e!r}"[:160])
+                found = len([i for i in items if i.kind == "news"])
+                if self.max_articles:   # cap news per company, newest first; actions are never capped
+                    news = sorted((i for i in items if i.kind == "news"), key=lambda i: i.published, reverse=True)
+                    items = news[:self.max_articles] + [i for i in items if i.kind != "news"]
+                if len(errors) == n_err and items:   # only cache clean fetches
+                    icache.mkdir(parents=True, exist_ok=True)
+                    for i in items:
+                        i.style = classify_style(i)
+                    ck.write_text(json.dumps([asdict(i) for i in items]), encoding="utf-8")
+            for i in items:
+                i.style = classify_style(i)
+                if i.kind == "news" and not i.parse:
+                    i.parse = "headline-only"
             raw[h.symbol] = items
-            if len(errors) == n_err and items:   # only cache clean fetches
-                icache.mkdir(parents=True, exist_ok=True)
-                ck.write_text(json.dumps([asdict(i) for i in items]))
+            nn = [i for i in items if i.kind == "news"]
+            ui.ingest_stock(idx, n, h, found, len(nn), len(items) - len(nn), Counter(i.style for i in nn),
+                            from_cache, err_txt, time.time() - t0, self.max_articles)
         if self.fetch_text:
             from .ingest.fulltext import enrich
-            enrich([i for v in raw.values() for i in v], self.text_cache)
+            ui.note("  fetching article body text for better labels (cached per URL) ...", "d")
+            enrich([i for v in raw.values() for i in v], self.text_cache, progress=ui.fulltext)
+            ui.clear_status()
+            for h in holdings:
+                ui.parse_summary(h, Counter(i.parse.split(" ")[0] + (" " + i.parse.split(" ")[1] if i.parse.startswith("headline") and len(i.parse.split(" ")) > 1 else "")
+                                            for i in raw[h.symbol] if i.kind == "news"), None)
         return raw, errors
 
     # -- Stage 3 --------------------------------------------------------------------
@@ -131,20 +161,36 @@ class Pipeline:
 
     # -- Stages 3+4 -----------------------------------------------------------------
     def classify_and_validate(self, holdings, raw):
+        ui = self.ui
+        ui.stage("Classify", f"model labels each item; schema-forced, validated ({self.clf.model_id})")
         names = {h.symbol: h.name for h in holdings}
+        key_of = lambda i: item_key(i.url, i.title, i.snippet, self.clf.model_id, PROMPT_VERSION)
+        need = [(i, names[sym]) for sym, its in raw.items() for i in its if i.prelabel is None and i.url.strip()]
+        todo = [(i, c) for i, c in need if not self.cache.get(key_of(i))]
+        ui.label_start(len(todo), len(need) - len(todo), Counter(i.symbol for i, _ in todo))
         if hasattr(self.clf, "prefetch"):   # batch labelling (claude-code mode)
-            self.clf.on_label = lambda it, d, raw: self.cache.put(   # persist immediately: an aborted run keeps its work
-                item_key(it.url, it.title, it.snippet, self.clf.model_id, PROMPT_VERSION), d, raw)
-            self.clf.prefetch([(i, names[sym]) for sym, its in raw.items() for i in its
-                               if i.prelabel is None and i.url.strip()
-                               and not self.cache.get(item_key(i.url, i.title, i.snippet, self.clf.model_id, PROMPT_VERSION))])
+            def persist(it, d, raw_):       # persist immediately: an aborted run keeps its work
+                self.cache.put(key_of(it), d, raw_)
+                ui.item_labelled(it, d)
+            self.clf.on_label = persist
+            self.clf.on_fail = ui.item_failed
+            self.clf.say = ui.batch_note
+            self.clf.prefetch(todo)
         lookback = self.r["windows"]["news_days"]
         kept: dict[str, list[LabelledItem]] = {h.symbol: [] for h in holdings}
         dropped: list[Dropped] = []
         raw_log = []
+        sequential = not hasattr(self.clf, "prefetch")
+        if sequential:
+            ui.note("  labelling item by item (no batching for this classifier)", "d")
+        ui.stage("Validate", "schema check; failures retried once, then dropped with a logged reason")
+        hmap = {h.symbol: h for h in holdings}
         for sym, items in raw.items():
+            drop0, ev = len(dropped), Counter()
             for it in items:
                 label_d, resp, cached = self._classify_one(it, names[sym])
+                if sequential and not cached and label_d is not None and it.prelabel is None:
+                    ui.item_labelled(it, label_d)
                 attempts = 1
                 reason = validate_label(it, label_d, self.r, self.as_of, lookback)
                 errs = getattr(self.clf, "errors", {})
@@ -164,10 +210,15 @@ class Pipeline:
                     dropped.append(Dropped(sym, it.title, it.url, it.published, "validate", reason))
                     continue
                 kept[sym].append(LabelledItem(it, to_label(label_d), resp, cached, attempts))
+                ev[label_d["event_type"]] += 1
+            ui.stock_validated(hmap[sym], len(kept[sym]), len(items), Counter(d.reason.split(":")[0] for d in dropped[drop0:]), ev, None)
         return kept, dropped, raw_log
 
     # -- Full run -------------------------------------------------------------------
     def run(self, holdings: list[Holding], ingested=None) -> dict:
+        ui = self.ui
+        ui.start({"as of": self.as_of, "classifier": self.clf.model_id, "max articles": self.max_articles or "all",
+                  "full text": "on" if self.fetch_text else "off (headline only)", "output": self.out}, holdings)
         raw, ingest_errors = ingested or self.ingest(holdings)
         kept, dropped, raw_log = self.classify_and_validate(holdings, raw)
         failed = [d for d in dropped if d.reason.startswith("label_failed")]
@@ -183,11 +234,12 @@ class Pipeline:
                 raise RuntimeError("Refusing to write a report built on failed labelling. " + msg +
                                    "\nLabels already obtained are cached - re-run the same command to retry only the failures "
                                    "(or pass --allow-partial-labels to accept the gap).")
-            print("WARNING: " + msg)
+            ui.note("WARNING: " + msg, "y")
         dcount: dict[str, int] = {}
         for d in dropped:
             dcount[d.symbol] = dcount.get(d.symbol, 0) + 1
         scores = score_portfolio(holdings, kept, dcount, self.as_of, self.r)
+        ui.scored(scores)
 
         ctx = []
         if self.prices is not None:   # context only; scores were already computed above
@@ -214,10 +266,23 @@ class Pipeline:
                           "kept": sum(len(v) for v in kept.values()), "dropped": len(dropped)}}
         result = dict(run=run, scores=scores, kept=kept, dropped=dropped, coverage=coverage,
                       price_context=ctx, relative=rel, ingest_errors=ingest_errors, raw_log=raw_log)
+        ui.stage("Report", "workbook, commentary per stock, portfolio observations, PDF")
         write_reports(self.out, result, self.r)
-        narr = {s.symbol: self.narrator.holding(s, kept[s.symbol]) for s in scores}
+        narr, done = {}, 0
+        with ThreadPoolExecutor(2) as ex:
+            for sc, out in zip(scores, ex.map(lambda sc: self.narrator.holding(sc, kept[sc.symbol]), scores)):
+                narr[sc.symbol] = out
+                done += 1
+                ui.narrate(done, len(scores), sc.name)
+        ui.clear_status()
+        ui.note("  writing portfolio-level observations ...", "d")
         obs = self.narrator.portfolio(portfolio_facts(scores, kept))
         result.update(narrative=narr, observations=obs)
         (self.out / "narrative.json").write_text(json.dumps({"holdings": narr, "observations": obs}, indent=2))
         build_pdf(self.out / "sentinelq_scorecard.pdf", result, self.r, narr, obs, self.meta)
+        t = run["totals"]
+        ui.finish({"retrieved": t["retrieved"], "kept": t["kept"], "dropped": t["dropped"],
+                   "label failures": t["label_failed"], "stocks": len(scores),
+                   "flags": ", ".join(x.symbol for x in scores if x.governance_label == "Flag") or "none"},
+                  [str(self.out / "sentinelq_scorecard.pdf"), str(self.out / "sentinelq_report.xlsx")])
         return result

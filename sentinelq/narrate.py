@@ -202,6 +202,8 @@ class CachedNarrator:
         self.inner, self.model_id, self._h = inner, model_id, hashlib
         self.path = pathlib.Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        import threading
+        self._lock = threading.Lock()
         self._d = {}
         if self.path.exists():
             for line in self.path.read_text().splitlines():
@@ -212,9 +214,11 @@ class CachedNarrator:
     def _wrap(self, kind, payload, fn):
         key = self._h.sha256(f"{kind}|{self.model_id}|{json.dumps(payload, sort_keys=True, default=str)}".encode()).hexdigest()
         if key not in self._d:
-            self._d[key] = fn()
-            with self.path.open("a") as f:
-                f.write(json.dumps({"key": key, "value": self._d[key]}) + "\n")
+            val = fn()
+            with self._lock:
+                self._d[key] = val
+                with self.path.open("a", encoding="utf-8") as f:
+                    f.write(json.dumps({"key": key, "value": val}, ensure_ascii=False) + "\n")
         return self._d[key]
 
     def holding(self, s, items):

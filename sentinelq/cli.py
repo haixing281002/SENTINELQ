@@ -34,6 +34,10 @@ def main(argv=None):
     p.add_argument("--batch-size", type=int, default=8, help="items per claude call (claude-code mode)")
     p.add_argument("--workers", type=int, default=2, help="parallel claude calls (lower if you hit rate limits)")
     p.add_argument("--allow-partial-labels", action="store_true", help="write the report even if many items failed to label")
+    p.add_argument("--progress", choices=["auto", "live", "plain", "off"], default="auto",
+                   help="live = redrawing bar (real terminal); plain = line-by-line (logs, Claude Code); auto picks")
+    p.add_argument("--log", default="work/run.log", help="plain-text copy of the run display (tail -f it)")
+    p.add_argument("--ascii", action="store_true", help="ASCII bars (#---) instead of block characters")
     p.add_argument("--fetch-text", action="store_true", help="fetch article body text (better labels than headlines)")
     p.add_argument("--work", default="work", help="dir for hand-off files (file mode)")
     a = p.parse_args(argv)
@@ -63,6 +67,8 @@ def main(argv=None):
         prices = None
 
     work = Path(a.work)
+    from .progress import Display
+    ui = Display(a.progress, a.log if a.progress != "off" else None, a.ascii, work / "progress.json")
     if a.classifier == "claude-code" or a.narrator == "claude-code":
         from .claude_code import preflight
         preflight(a.model)
@@ -103,7 +109,7 @@ def main(argv=None):
         p.error("give --portfolio or --pick")
     pipe = Pipeline(r, news, actions, prices, clf, out, a.cache, as_of, a.mode,
                     narrator, a.title, a.coverage, a.max_articles, a.fetch_text,
-                    1.01 if a.allow_partial_labels else 0.10)
+                    1.01 if a.allow_partial_labels else 0.10, ui=ui)
     from .resolve import enrich
     holdings = enrich(holdings, a.universe, mode="none" if a.classifier in ("keyword", "file") else "claude-code", model=a.model)
     ingested = None
@@ -122,6 +128,8 @@ def main(argv=None):
         if inner.missing:
             print(f"NOTE: {len(inner.missing)} holdings used template prose; see {work}/pending_narratives.jsonl")
     t = res["run"]["totals"]
+    if a.progress != "off":
+        return 0
     print(f"Done. retrieved={t['retrieved']} kept={t['kept']} dropped={t['dropped']} -> {out}/sentinelq_scorecard.pdf (+ xlsx)")
     for s in res["scores"]:
         print(f"{s.symbol:<12} sent={s.company_sentiment!s:>5}  sector={s.sector_sentiment!s:>5}  "
