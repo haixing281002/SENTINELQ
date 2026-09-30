@@ -39,17 +39,16 @@ def write_reports(out: Path, res: dict, rubric) -> None:
     wb.remove(wb.active)
 
     # Scorecard
-    heads = ["Symbol", "Company", "Sector", "Company Sentiment (-2..+2)", "Sector Sentiment (-2..+2)",
+    heads = ["Symbol", "Company", "Cap", "Sector", "Weight", "Sentiment (-2..+2)", "Sentiment (unrounded)", "Sector Sentiment (raw)",
              "Governance Score", "Governance Label", "Corporate Action Score", "Items", "Dropped",
              "Low Confidence", "Rationale"]
-    rows = [[s.symbol, s.name, s.sector, s.company_sentiment, s.sector_sentiment, s.governance_score,
+    rows = [[s.symbol, s.name, s.cap, s.sector, s.weight, s.company_sentiment, s.company_sentiment_raw, s.sector_sentiment, s.governance_score,
              s.governance_label, s.corporate_action_score, s.n_items, s.n_dropped,
              "YES" if s.low_confidence else "", s.rationale] for s in scores]
-    ws = _sheet(wb, "Scorecard", heads, rows, widths={"Company": 26, "Rationale": 90,
-                "Company Sentiment (-2..+2)": 16, "Sector Sentiment (-2..+2)": 16})
+    ws = _sheet(wb, "Scorecard", heads, rows, widths={"Company": 26, "Rationale": 90})
     for row in ws.iter_rows(min_row=2):
-        row[6].fill = PatternFill("solid", fgColor=FILLS.get(row[6].value, "FFFFFF"))
-        row[11].alignment = Alignment(wrap_text=True, vertical="top")
+        row[9].fill = PatternFill("solid", fgColor=FILLS.get(row[9].value, "FFFFFF"))
+        row[14].alignment = Alignment(wrap_text=True, vertical="top")
 
     ev_head = ["Symbol", "Date", "Headline", "Event Type", "Sentiment", "Governance Flag",
                "Rationale", "Source URL"]

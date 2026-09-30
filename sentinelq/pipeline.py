@@ -11,6 +11,8 @@ from .cache import LabelCache, item_key
 from .classify import PROMPT_VERSION, Classifier, to_label
 from .context import price_context
 from .models import Dropped, Holding, Label, LabelledItem, RawItem
+from .narrate import TemplateNarrator, portfolio_facts
+from .pdf import build_pdf
 from .report import write_reports
 from .rubric import Rubric
 from .score import relative_mode, score_portfolio
@@ -24,19 +26,24 @@ def load_portfolio(path: str | Path) -> list[Holding]:
         need = {"symbol", "name", "sector"}
         if not need <= set(cols):
             raise ValueError(f"portfolio needs columns {sorted(need)}; got {rd.fieldnames}")
-        return [Holding(r[cols["symbol"]].strip(), r[cols["name"]].strip(), r[cols["sector"]].strip())
+        opt = lambda r, k: (r.get(cols[k]) or "").strip() if k in cols else ""
+        return [Holding(r[cols["symbol"]].strip(), r[cols["name"]].strip(), r[cols["sector"]].strip(),
+                        opt(r, "cap"), opt(r, "weight"))
                 for r in rd if r[cols["symbol"]].strip()]
 
 
 class Pipeline:
     def __init__(self, rubric: Rubric, news, actions, prices, classifier: Classifier,
                  out_dir: str | Path, cache_path: str | Path = ".cache/labels.jsonl",
-                 as_of: date | None = None, mode: str = "absolute"):
+                 as_of: date | None = None, mode: str = "absolute",
+                 narrator=None, title: str = "Portfolio", coverage: str = ""):
         self.r, self.news, self.actions, self.prices, self.clf = rubric, news, actions, prices, classifier
         self.out = Path(out_dir)
         self.cache = LabelCache(cache_path)
         self.as_of = as_of or date.today()
         self.mode = mode
+        self.narrator = narrator or TemplateNarrator()
+        self.meta = {"title": title, "coverage": coverage}
 
     # -- Stage 2 --------------------------------------------------------------------
     def ingest(self, holdings):
@@ -131,4 +138,9 @@ class Pipeline:
         result = dict(run=run, scores=scores, kept=kept, dropped=dropped, coverage=coverage,
                       price_context=ctx, relative=rel, ingest_errors=ingest_errors, raw_log=raw_log)
         write_reports(self.out, result, self.r)
+        narr = {s.symbol: self.narrator.holding(s, kept[s.symbol]) for s in scores}
+        obs = self.narrator.portfolio(portfolio_facts(scores, kept))
+        result.update(narrative=narr, observations=obs)
+        (self.out / "narrative.json").write_text(json.dumps({"holdings": narr, "observations": obs}, indent=2))
+        build_pdf(self.out / "sentinelq_scorecard.pdf", result, self.r, narr, obs, self.meta)
         return result

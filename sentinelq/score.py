@@ -16,6 +16,13 @@ def recency_weight(published: str, as_of: date, r: Rubric) -> float:
     return 0.5 ** (age_td / r["sentiment"]["half_life_trading_days"])
 
 
+def to_integer(x: float | None) -> int | None:
+    """Displayed score: nearest integer on the -2..+2 scale, halves away from zero."""
+    if x is None:
+        return None
+    return int(math.copysign(math.floor(abs(x) + 0.5), x))
+
+
 def weighted_sentiment(items: list[LabelledItem], as_of: date, r: Rubric) -> float | None:
     """Recency-weighted mean of ordinal sentiments (news only)."""
     num = den = 0.0
@@ -28,20 +35,42 @@ def weighted_sentiment(items: list[LabelledItem], as_of: date, r: Rubric) -> flo
     return num / den if den else None
 
 
+def _penalty(pen, lab):
+    p = pen.get(lab.event_type)
+    if isinstance(p, dict):
+        p = p.get(lab.materiality or "medium", p["medium"])
+    return p
+
+
 def governance(items: list[LabelledItem], r: Rubric) -> tuple[float, str, list[dict]]:
+    """Start at 100; fixed penalties per event type (once per type). Background mentions of
+    out-of-window events earn one flat memory discount, never double-counted with an in-window
+    penalty of the same type."""
     g = r["governance"]
     pen = g["penalties"]
     score, applied, seen = float(g["start"]), [], set()
+    historical = []
     for li in sorted(items, key=lambda x: x.item.published):
         lab = li.label
-        if not lab.governance_flag or lab.event_type not in pen:
+        if not lab.governance_flag or _penalty(pen, lab) is None:
+            continue
+        if lab.historical:
+            historical.append(li)
             continue
         if g["count_mode"] == "once_per_type" and lab.event_type in seen:
             continue
         seen.add(lab.event_type)
-        score += pen[lab.event_type]
-        applied.append({"event_type": lab.event_type, "penalty": pen[lab.event_type],
-                        "date": li.item.published, "headline": li.item.title, "url": li.item.url})
+        p = _penalty(pen, lab)
+        score += p
+        applied.append({"event_type": lab.event_type, "penalty": p, "date": li.item.published,
+                        "headline": li.item.title, "url": li.item.url})
+    memory = [li for li in historical if li.label.event_type not in seen]
+    if memory:
+        li = memory[-1]
+        score += g["historical_penalty"]
+        applied.append({"event_type": "historical (" + li.label.event_type + ")",
+                        "penalty": g["historical_penalty"], "date": li.item.published,
+                        "headline": li.item.title, "url": li.item.url})
     label = next(x["label"] for x in g["labels"] if score >= x["min"])
     return score, label, applied
 
@@ -90,18 +119,18 @@ def score_portfolio(holdings: list[Holding], by_symbol: dict[str, list[LabelledI
         rat = (f"Governance = {r['governance']['start']} with penalties [{pen_txt}] = {g_score:g} ({g_label}). "
                f"Sentiment from {n_news} news item(s), half-life {r['sentiment']['half_life_trading_days']} trading days."
                + (" LOW CONFIDENCE: sparse coverage." if low else ""))
-        out.append(StockScore(h.symbol, h.name, h.sector,
-                              None if cs is None else round(cs, 2),
+        out.append(StockScore(h.symbol, h.name, h.sector, to_integer(cs),
+                              None if cs is None else round(cs, 3),
                               None if sector_sent.get(h.sector) is None else round(sector_sent[h.sector], 2),
                               g_score, g_label, pens, round(ca_score, 2), ca_detail,
-                              len(items), dropped_counts.get(h.symbol, 0), low, rat))
+                              len(items), dropped_counts.get(h.symbol, 0), low, rat, h.cap, h.weight))
     return out
 
 
 def relative_mode(scores: list[StockScore], r: Rubric) -> list[dict]:
     """Portfolio-relative: winsorize at +/-k sigma then cross-sectionally z-score."""
     k = r["portfolio_relative"]["winsor_sigma"]
-    cols = {"company_sentiment": lambda s: s.company_sentiment,
+    cols = {"company_sentiment": lambda s: s.company_sentiment_raw,
             "sector_sentiment": lambda s: s.sector_sentiment,
             "governance_score": lambda s: s.governance_score,
             "corporate_action_score": lambda s: s.corporate_action_score}

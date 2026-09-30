@@ -24,6 +24,10 @@ def main(argv=None):
     p.add_argument("--actions-file")
     p.add_argument("--prices", choices=["yahoo", "file", "none"], default="yahoo")
     p.add_argument("--prices-file")
+    p.add_argument("--title", default="Portfolio", help="report title, e.g. 'QVM Portfolio'")
+    p.add_argument("--coverage", default="", help="coverage blurb on page 1")
+    p.add_argument("--narrator", choices=["anthropic", "template"], default=None,
+                   help="prose writer for the PDF (default: same as --classifier)")
     a = p.parse_args(argv)
 
     from .ingest.files import FileActions, FileNews, FilePrices
@@ -57,10 +61,16 @@ def main(argv=None):
         from .classify import AnthropicClassifier
         clf = AnthropicClassifier(r, a.model)
 
+    from .narrate import AnthropicNarrator, CachedNarrator, TemplateNarrator
+    use_llm = (a.narrator or a.classifier) == "anthropic"
+    inner = AnthropicNarrator(a.model) if use_llm else TemplateNarrator()
+    narrator = CachedNarrator(inner, Path(a.cache).with_name("narrative.jsonl"),
+                              getattr(inner, "model_id", "template"))
     out = Path(a.out or f"runs/{as_of.isoformat()}")
-    res = Pipeline(r, news, actions, prices, clf, out, a.cache, as_of, a.mode).run(load_portfolio(a.portfolio))
+    res = Pipeline(r, news, actions, prices, clf, out, a.cache, as_of, a.mode,
+                   narrator, a.title, a.coverage).run(load_portfolio(a.portfolio))
     t = res["run"]["totals"]
-    print(f"Done. retrieved={t['retrieved']} kept={t['kept']} dropped={t['dropped']} -> {out}/sentinelq_report.xlsx")
+    print(f"Done. retrieved={t['retrieved']} kept={t['kept']} dropped={t['dropped']} -> {out}/sentinelq_scorecard.pdf (+ xlsx)")
     for s in res["scores"]:
         print(f"{s.symbol:<12} sent={s.company_sentiment!s:>5}  sector={s.sector_sentiment!s:>5}  "
               f"gov={s.governance_score:g}/{s.governance_label}  corp={s.corporate_action_score:g}"

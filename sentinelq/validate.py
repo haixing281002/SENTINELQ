@@ -35,4 +35,6 @@ def validate_label(item: RawItem, label_dict: dict | None, r: Rubric,
     m = label_dict.get("materiality")
     if m is not None and m not in r["materiality_levels"]:
         return f"invalid_materiality:{m}"
+    if "historical" in label_dict and not isinstance(label_dict["historical"], bool):
+        return "invalid_historical"
     return None

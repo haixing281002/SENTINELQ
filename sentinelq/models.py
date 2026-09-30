@@ -9,6 +9,8 @@ class Holding:
     symbol: str
     name: str
     sector: str
+    cap: str = ""
+    weight: str = ""
 
 
 @dataclass
@@ -31,7 +33,8 @@ class Label:
     sentiment: int
     rationale: str
     governance_flag: bool
-    materiality: str | None = None   # only used for corporate actions
+    materiality: str | None = None   # only used for corporate actions / fines
+    historical: bool = False         # event happened before the lookback window (background mention)
 
 
 @dataclass
@@ -50,7 +53,7 @@ class LabelledItem:
             d.update(event_type=self.label.event_type, sentiment=self.label.sentiment,
                      rationale=self.label.rationale,
                      governance_flag=self.label.governance_flag,
-                     materiality=self.label.materiality)
+                     materiality=self.label.materiality, historical=self.label.historical)
         return d
 
 
@@ -69,7 +72,8 @@ class StockScore:
     symbol: str
     name: str
     sector: str
-    company_sentiment: float | None
+    company_sentiment: int | None          # displayed integer score, -2..+2
+    company_sentiment_raw: float | None    # recency-weighted mean before rounding
     sector_sentiment: float | None
     governance_score: float
     governance_label: str
@@ -80,6 +84,8 @@ class StockScore:
     n_dropped: int = 0
     low_confidence: bool = False
     rationale: str = ""
+    cap: str = ""
+    weight: str = ""
 
     def to_dict(self):
         return asdict(self)

@@ -1,47 +1,140 @@
 {
-  "version": "1.0.0",
+  "version": "1.1.0",
   "_note": "Single source of truth for every weight, penalty and taxonomy entry. Scores change only if this file changes. Values marked 'assumed' were not stated in the architecture document and should be confirmed by the committee.",
-
   "event_types": [
-    "earnings_beat", "earnings_miss", "guidance_change", "order_win",
-    "litigation", "regulatory_action", "auditor_issue", "pledge",
-    "management_exit", "capacity_expansion", "analyst_action",
-    "operating_update", "investigation", "rpt_concern",
-    "dividend", "buyback", "split_bonus", "dilution", "merger_acquisition",
+    "earnings_beat",
+    "earnings_miss",
+    "guidance_change",
+    "order_win",
+    "litigation",
+    "regulatory_action",
+    "auditor_resignation",
+    "auditor_restatement",
+    "exchange_fine",
+    "pledge",
+    "management_exit",
+    "board_independence",
+    "investigation",
+    "rpt_concern",
+    "capacity_expansion",
+    "analyst_action",
+    "operating_update",
+    "dividend",
+    "buyback",
+    "split_bonus",
+    "dilution",
+    "merger_acquisition",
     "other"
   ],
-  "sentiment_range": [-2, 2],
-  "materiality_levels": ["low", "medium", "high"],
-
-  "windows": { "news_days": 365, "actions_days": 365, "prices_days": 183 },
-
+  "sentiment_range": [
+    -2,
+    2
+  ],
+  "materiality_levels": [
+    "low",
+    "medium",
+    "high"
+  ],
+  "windows": {
+    "news_days": 365,
+    "actions_days": 365,
+    "prices_days": 183
+  },
   "sentiment": {
     "half_life_trading_days": 60,
     "trading_days_per_year": 252
   },
-
   "governance": {
     "start": 100,
     "count_mode": "once_per_type",
     "penalties": {
+      "auditor_restatement": -25,
+      "auditor_resignation": -20,
       "regulatory_action": -20,
-      "investigation": -10,
       "rpt_concern": -12,
-      "management_exit": -8,
-      "auditor_issue": -15,
+      "investigation": -10,
       "pledge": -10,
-      "litigation": -5
+      "exchange_fine": {
+        "low": -5,
+        "medium": -7,
+        "high": -10
+      },
+      "management_exit": -8,
+      "board_independence": -8
     },
-    "penalties_assumed": ["auditor_issue", "pledge", "litigation"],
+    "penalties_assumed": [
+      "pledge",
+      "exchange_fine (medium=-7 interpolated)"
+    ],
     "labels": [
-      { "label": "Clean", "min": 95 },
-      { "label": "Watch", "min": 80 },
-      { "label": "Flag", "min": -1000 }
-    ]
+      {
+        "label": "Clean",
+        "min": 95
+      },
+      {
+        "label": "Watch",
+        "min": 80
+      },
+      {
+        "label": "Flag",
+        "min": -1000
+      }
+    ],
+    "historical_penalty": -5,
+    "notes": {
+      "auditor_restatement": [
+        "Auditor resignation or restatement",
+        "Highest-severity integrity events. -25 restatement / -20 resignation."
+      ],
+      "regulatory_action": [
+        "Regulatory action or settlement",
+        "SEBI/exchange orders, settlement of adjudication."
+      ],
+      "rpt_concern": [
+        "Related-party-transaction concern",
+        "Material or investor-contested RPTs."
+      ],
+      "investigation": [
+        "Live investigation overhang",
+        "Unresolved probe active in the window."
+      ],
+      "exchange_fine": [
+        "Exchange fine / disclosure lapse",
+        "Non-integrity procedural penalties (-5 to -10 by materiality)."
+      ],
+      "management_exit": [
+        "Management or compliance churn",
+        "Unplanned CXO/CS/CFO exits."
+      ],
+      "board_independence": [
+        "Board-independence change",
+        "Combined roles, indep. director gaps."
+      ],
+      "historical": [
+        "Historical (out-of-window) event",
+        "Memory discount; not double-counted."
+      ]
+    },
+    "label_text": {
+      "Clean": [
+        "\u2265 95",
+        "No material adverse events in the 12-month window."
+      ],
+      "Watch": [
+        "80\u201394",
+        "One or more disclosed items warranting monitoring; not integrity-level."
+      ],
+      "Flag": [
+        "< 80",
+        "Live or recent event requiring IC-level attention before adding risk."
+      ]
+    }
   },
-
   "corporate_actions": {
-    "clip": [-2, 2],
+    "clip": [
+      -2,
+      2
+    ],
     "base": {
       "dividend": 1.0,
       "buyback": 1.5,
@@ -49,12 +142,51 @@
       "dilution": -1.5,
       "merger_acquisition": "by_sentiment_sign"
     },
-    "materiality_multiplier": { "low": 0.5, "medium": 1.0, "high": 1.5 },
-    "dividend_yield_materiality": { "medium_at": 0.01, "high_at": 0.03 },
+    "materiality_multiplier": {
+      "low": 0.5,
+      "medium": 1.0,
+      "high": 1.5
+    },
+    "dividend_yield_materiality": {
+      "medium_at": 0.01,
+      "high_at": 0.03
+    },
     "_note": "Base values and multipliers are assumed; the document specifies only direction and materiality scaling."
   },
-
-  "confidence": { "low_below_items": 3 },
-
-  "portfolio_relative": { "winsor_sigma": 3.0 }
+  "confidence": {
+    "low_below_items": 3
+  },
+  "portfolio_relative": {
+    "winsor_sigma": 3.0
+  },
+  "sentiment_anchors": [
+    [
+      2,
+      "Sustained fundamental beats with broad confirming evidence (record earnings, upgraded guidance, favourable structural drivers) and no material offset in the lookback."
+    ],
+    [
+      1,
+      "Positive year on balance, but with a specific offset \u2014 one weak quarter, an execution issue, or a valuation caution \u2014 that prevents the maximum score."
+    ],
+    [
+      0,
+      "Genuinely two-sided: material positive drivers matched by material negative drivers, or coverage judged insufficient to score directionally."
+    ],
+    [
+      -1,
+      "Material earnings deterioration or a defined event whose economic impact dominates the year, even if partial offsets exist."
+    ],
+    [
+      -2,
+      "Severe or compounding negatives."
+    ]
+  ],
+  "corporate_action_types": [
+    "dividend",
+    "buyback",
+    "split_bonus",
+    "dilution",
+    "merger_acquisition",
+    "capacity_expansion"
+  ]
 }

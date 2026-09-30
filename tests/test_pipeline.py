@@ -71,3 +71,28 @@ def test_corporate_actions_and_sector(tmp_path):
     assert s["BPCL"].corporate_action_score == 2.0         # 1.5 * 1.5 = 2.25 clipped to 2
     assert s["ANGELONE"].sector_sentiment == s["HDFCBANK"].sector_sentiment
     assert s["BPCL"].low_confidence
+
+
+def _li(et, gov=True, hist=False, mat=None, date_="2026-06-01"):
+    from sentinelq.models import Label, LabelledItem, RawItem
+    return LabelledItem(RawItem("X", "news", et, "", "https://a.b/" + et, date_),
+                        Label(et, -1, "r", gov, mat, hist))
+
+
+def test_governance_rubric_variants():
+    from sentinelq.score import governance, to_integer
+    r = load_rubric()
+    assert governance([_li("regulatory_action"), _li("management_exit")], r)[:2] == (72, "Flag")
+    assert governance([_li("auditor_restatement")], r)[0] == 75
+    assert governance([_li("exchange_fine", mat="high")], r)[0] == 90
+    # historical background mention -> flat -5 memory discount, once
+    s, lab, _ = governance([_li("regulatory_action", hist=True), _li("regulatory_action", hist=True, date_="2026-06-02")], r)
+    assert (s, lab) == (95, "Clean")
+    # not double counted with an in-window penalty of the same type
+    assert governance([_li("regulatory_action"), _li("regulatory_action", hist=True)], r)[0] == 80
+    assert [to_integer(x) for x in (-0.42, 0.5, 1.6, -0.5, 1.49)] == [0, 1, 2, -1, 1]
+
+
+def test_pdf_written(tmp_path):
+    run(tmp_path)
+    assert (tmp_path / "out" / "sentinelq_scorecard.pdf").stat().st_size > 5000

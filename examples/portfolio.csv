@@ -1,4 +1,4 @@
-symbol,name,sector
-ANGELONE,Angel One,Financial Services
-HDFCBANK,HDFC Bank,Financial Services
-BPCL,Bharat Petroleum,Energy
+symbol,name,sector,cap,weight
+ANGELONE,Angel One,BFSI,Small,2.86%
+HDFCBANK,HDFC Bank,BFSI,Large,5.71%
+BPCL,Bharat Petroleum,Energy,Large,2.86%

@@ -23,7 +23,9 @@ SYSTEM = (
     "rationale is ONE sentence grounded in the supplied text. "
     "governance_flag is true only if the item concerns regulation, investigations, auditors, "
     "promoter pledges, related-party transactions, litigation, or senior management changes. "
-    "materiality (low/medium/high) is the economic size of a corporate action, else omit. "
+    "materiality (low/medium/high) is the economic size of a corporate action or fine, else omit. "
+    "historical is true only if the text describes an event that took place more than 12 months before the publication date "
+    "(background mention); otherwise false. "
     "You must answer by calling the label_item tool."
 )
 
@@ -40,6 +42,7 @@ def tool_schema(r: Rubric) -> dict:
                 "rationale": {"type": "string"},
                 "governance_flag": {"type": "boolean"},
                 "materiality": {"type": "string", "enum": r["materiality_levels"]},
+                "historical": {"type": "boolean"},
             },
             "required": ["event_type", "sentiment", "rationale", "governance_flag"],
             "additionalProperties": False,
@@ -91,7 +94,10 @@ class AnthropicClassifier:
 _RULES = [  # (regex, event_type, sentiment, governance)
     (r"sebi|regulator|rbi (penalt|order)|penalty|settlement order", "regulatory_action", -2, True),
     (r"investigat|probe|raid|show[- ]cause", "investigation", -1, True),
-    (r"auditor.*(resign|qualif)|qualified opinion", "auditor_issue", -2, True),
+    (r"auditor.*(resign)", "auditor_resignation", -2, True),
+    (r"restate|restatement|qualified opinion", "auditor_restatement", -2, True),
+    (r"exchange fine|fined by (bse|nse)|disclosure lapse", "exchange_fine", -1, True),
+    (r"independent director|board independence|combined (roles|chair)", "board_independence", -1, True),
     (r"pledge", "pledge", -1, True),
     (r"related[- ]party", "rpt_concern", -1, True),
     (r"resign|steps down|exit of|quits", "management_exit", -1, True),
@@ -131,4 +137,4 @@ class KeywordClassifier:
 
 def to_label(d: dict) -> Label:
     return Label(d["event_type"], d["sentiment"], d["rationale"], bool(d["governance_flag"]),
-                 d.get("materiality"))
+                 d.get("materiality"), bool(d.get("historical", False)))
