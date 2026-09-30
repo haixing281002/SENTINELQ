@@ -194,21 +194,6 @@ def test_find_claude_respects_env_and_reports_missing(tmp_path, monkeypatch):
         cc.preflight()
 
 
-def test_ingest_is_cached(tmp_path):
-    r = load_rubric()
-    hold = load_portfolio(ROOT / "examples" / "portfolio.csv")
-
-    class Once:
-        n = 0
-        def fetch(self, h, s, e):
-            Once.n += 1
-            return FileNews(FX / "news.json").fetch(h, s, e)
-    p = Pipeline(r, Once(), None, None, KeywordClassifier(), tmp_path / "o", tmp_path / "c.jsonl", AS_OF,
-                 text_cache=tmp_path / "ft.jsonl")
-    p.ingest(hold)
-    first = Once.n
-    p.ingest(hold)
-    assert Once.n == first == 3            # second ingest reads the cache, no provider calls
 
 
 # ---- labelling resilience (the "285 of 338 unlabelled" failure) -----------------------------------------------
@@ -386,7 +371,7 @@ def test_failed_stock_is_retried_and_recovered(tmp_path):
     assert not errs and len([i for i in raw["BPCL"] if i.kind == "news"]) == 1
 
 
-def test_persistent_news_failure_blocks_report_but_keeps_cache(tmp_path):
+def test_persistent_news_failure_blocks_report(tmp_path):
     import pytest
     r = load_rubric()
     hold = load_portfolio(ROOT / "examples" / "portfolio.csv")
@@ -395,8 +380,7 @@ def test_persistent_news_failure_blocks_report_but_keeps_cache(tmp_path):
                  text_cache=tmp_path / "ft.jsonl", ingest_retry_wait=0)
     with pytest.raises(RuntimeError, match="BPCL"):
         p.ingest(hold)
-    assert (tmp_path / "ingest" / f"{AS_OF}_ANGELONE_None.json").exists()          # good stocks are cached
-    assert not (tmp_path / "ingest" / f"{AS_OF}_BPCL_None.json").exists()          # the failed one is not
+    assert not (tmp_path / "ingest").exists()                                       # no article cache is ever created
     p2 = Pipeline(r, news, None, None, KeywordClassifier(), tmp_path / "o2", tmp_path / "c.jsonl", AS_OF,
                   text_cache=tmp_path / "ft.jsonl", ingest_retry_wait=0, allow_missing_news=True)
     raw, errs = p2.ingest(hold)                     # override accepts the gap
@@ -423,19 +407,6 @@ def test_generic_market_headlines_are_prefiltered_and_disclosed(tmp_path):
     assert "Bajaj Finance Q4 profit rises 22%" not in reasons
 
 
-def test_cache_entry_with_no_news_is_refetched(tmp_path):
-    from sentinelq.models import RawItem
-    r = load_rubric()
-    hold = load_portfolio(ROOT / "examples" / "portfolio.csv")[:1]
-    icache = tmp_path / "ingest"
-    icache.mkdir()
-    stale = [RawItem("ANGELONE", "action", "Div", "", "https://x/y", "2026-05-01")]     # a silently-empty old fetch
-    from dataclasses import asdict
-    (icache / f"{AS_OF}_ANGELONE_None.json").write_text(json.dumps([asdict(i) for i in stale]))
-    p = Pipeline(r, FileNews(FX / "news.json"), None, None, KeywordClassifier(), tmp_path / "o", tmp_path / "c.jsonl", AS_OF,
-                 text_cache=tmp_path / "ft.jsonl")
-    raw, _ = p.ingest(hold)
-    assert any(i.kind == "news" for i in raw["ANGELONE"])
 
 
 # ---- rolling window: latest N usable articles, stop as soon as N is reached -------------------------------------
@@ -506,83 +477,73 @@ def test_pipeline_wires_stop_condition_and_caps_to_latest(tmp_path):
     assert min(i.published for i in news) >= "2026-05-01"                 # did not reach back further than needed
 
 
-# ---- BigQuery route (fake client: SQL, cost gate, row conversion, relevance) ------------------------------------
-class _Job:
-    def __init__(self, gb=0, rows=()):
-        self.total_bytes_processed = int(gb * 1e9)
-        self._rows = list(rows)
-    def result(self):
-        return self._rows
+# ---- streaming, in-memory: articles are read and scored, never stored ------------------------------------------
+MARKER = "ZZ-UNIQUE-ARTICLE-BODY-TEXT-ZZ"
 
 
-class _FakeBQ:
-    def __init__(self, gb, rows):
-        self.gb, self.rows, self.calls = gb, rows, []
-    def query(self, sql, job_config=None):
-        dry = bool(getattr(job_config, "dry_run", False))
-        self.calls.append(("dry" if dry else "run", sql, job_config))
-        return _Job(self.gb) if dry else _Job(self.gb, self.rows)
+def test_no_article_text_is_written_anywhere(tmp_path, monkeypatch):
+    from sentinelq.ingest import fulltext
+    monkeypatch.setattr(fulltext, "fetch_text", lambda url, *a, **k: MARKER + " Angel One results were strong " + url)
+    seen = []
 
-
-def _bq_rows():
-    r = lambda sym, url, title, pub, m, it: {"symbol": sym, "url": url, "source": "x.com", "title": title, "published": pub,
-                                             "mentions": m, "in_title": it}
-    return [r("ANGELONE", "https://x.com/a", "Angel One &amp; SEBI: settlement", "20260615093000", 5, True),
-            r("ANGELONE", "https://x.com/a/", "duplicate url", "20260615093000", 2, False),
-            r("ANGELONE", "https://x.com/b", "Broking sector outlook", "20260601000000", 3, False),
-            r("TITAN", "https://x.com/t", "Titan Company Q4 results", "20260510000000", 4, True)]
-
-
-def test_bigquery_sql_is_correct_and_scoped():
-    from sentinelq.ingest.bq import GdeltBigQuery
-    hold = [h for h in load_portfolio(ROOT / "examples" / "portfolio.csv") if h.symbol == "ANGELONE"]
-    hold[0].aliases = "Angel One|Angel One Ltd"
-    sql = GdeltBigQuery(client=_FakeBQ(1, [])).build_sql(hold, date(2025, 7, 3), date(2026, 7, 3))
-    assert "gdelt-bq.gdeltv2.gkg_partitioned" in sql
-    assert "_PARTITIONTIME >= TIMESTAMP('2025-07-03')" in sql and "_PARTITIONTIME < TIMESTAMP('2026-07-04')" in sql
-    assert "PAGE_TITLE" in sql and "V2Organizations" in sql and "angel one" in sql.lower()
-    assert "(?:^|;)" in sql                     # exact org-name match, not a substring of another firm
-    assert ">= 2" in sql                        # min mentions unless the company is in the title
-
-
-def test_bigquery_cost_gate_blocks_before_spending(tmp_path):
-    import pytest
-    from sentinelq.ingest.bq import BigQueryTooExpensive, GdeltBigQuery
-    hold = load_portfolio(ROOT / "examples" / "portfolio.csv")[:1]
-    fake = _FakeBQ(gb=900, rows=_bq_rows())
-    bq = GdeltBigQuery(max_gb=300, client=fake, cache_dir=tmp_path)
-    with pytest.raises(BigQueryTooExpensive, match="900 GB"):
-        bq.prefetch(hold, date(2025, 7, 3), date(2026, 7, 3))
-    assert [c[0] for c in fake.calls] == ["dry"]          # the paid query never ran
-
-
-def test_bigquery_rows_become_ranked_deduped_articles_and_are_cached(tmp_path):
-    from sentinelq.ingest.bq import GdeltBigQuery
-    hold = load_portfolio(ROOT / "examples" / "portfolio.csv")[:1]
-    fake = _FakeBQ(gb=120, rows=_bq_rows())
-    bq = GdeltBigQuery(max_gb=300, client=fake, cache_dir=tmp_path)
-    bq.prefetch(hold, date(2025, 7, 3), date(2026, 7, 3))
-    items = bq.fetch(hold[0], date(2025, 7, 3), date(2026, 7, 3))
-    assert [c[0] for c in fake.calls] == ["dry", "run"]
-    assert getattr(fake.calls[1][2], "maximum_bytes_billed") <= 301 * 10**9        # hard billing cap on the real job
-    assert len(items) == 2                                                          # trailing-slash duplicate removed
-    a = next(i for i in items if i.url.endswith("/a"))
-    assert a.title == "Angel One & SEBI: settlement" and a.published == "2026-06-15"      # html unescaped, ISO date
-    assert a.relevance == 10.0 and next(i for i in items if i.url.endswith("/b")).relevance == 3.0   # title hit ranks higher
-    fake2 = _FakeBQ(gb=120, rows=[])
-    bq2 = GdeltBigQuery(max_gb=300, client=fake2, cache_dir=tmp_path)
-    bq2.prefetch(hold, date(2025, 7, 3), date(2026, 7, 3))
-    assert fake2.calls == [] and len(bq2.fetch(hold[0], date(2025, 7, 3), date(2026, 7, 3))) == 2   # re-run: cache, no cost
-
-
-def test_bigquery_through_pipeline_keeps_latest_articles(tmp_path):
-    from sentinelq.ingest.bq import GdeltBigQuery
+    class Clf(KeywordClassifier):
+        def classify(self, item, company):
+            seen.append(item.snippet)                  # what the model would be shown
+            return super().classify(item, company)
     r = load_rubric()
-    hold = load_portfolio(ROOT / "examples" / "portfolio.csv")[:1]
-    rows = [{"symbol": "ANGELONE", "url": f"https://x.com/{k}", "source": "x.com", "title": f"Angel One item {k}",
-             "published": f"2026{(k % 12) + 1:02d}15000000", "mentions": 3, "in_title": True} for k in range(80)]
-    p = Pipeline(r, GdeltBigQuery(client=_FakeBQ(10, rows), cache_dir=tmp_path / "bq"), None, None, KeywordClassifier(),
-                 tmp_path / "o", tmp_path / "c.jsonl", date(2026, 12, 31), max_articles=50, text_cache=tmp_path / "ft.jsonl")
-    raw, _ = p.ingest(hold)
-    news = [i for i in raw["ANGELONE"] if i.kind == "news"]
-    assert len(news) == 50 and news == sorted(news, key=lambda i: i.published, reverse=True)
+    hold = load_portfolio(ROOT / "examples" / "portfolio.csv")
+    p = Pipeline(r, FileNews(FX / "news.json"), None, None, Clf(), tmp_path / "out", tmp_path / "cache" / "labels.jsonl",
+                 AS_OF, fetch_text=True)
+    res = p.run(hold)
+    assert seen and all(MARKER in x for x in seen)     # the body WAS read (so the absence below is meaningful)
+    written = [f for f in tmp_path.rglob("*") if f.is_file()]
+    assert written, "the run must still write its report"
+    for f in written:
+        if f.suffix in (".xlsx", ".pdf"):
+            continue                                   # binary outputs checked separately below
+        assert MARKER.encode() not in f.read_bytes(), f"article body leaked into {f}"
+    assert not any("ingest" in f.parts or f.name.startswith("fulltext") for f in written)
+    import zipfile
+    with zipfile.ZipFile(tmp_path / "out" / "sentinelq_report.xlsx") as z:                       # xlsx is a zip of xml
+        assert all(MARKER.encode() not in z.read(n) for n in z.namelist())
+    assert all(li.item.snippet == "" for v in res["kept"].values() for li in v)                   # released after reading
+
+
+def test_no_disk_cache_writes_nothing_but_the_report(tmp_path):
+    r = load_rubric()
+    hold = load_portfolio(ROOT / "examples" / "portfolio.csv")
+    cache_dir = tmp_path / "cache"
+    Pipeline(r, FileNews(FX / "news.json"), None, None, KeywordClassifier(), tmp_path / "out", cache_dir / "labels.jsonl", AS_OF,
+             disk_cache=False).run(hold)
+    assert not cache_dir.exists()
+
+
+def test_reading_overlaps_with_scraping_next_stock(tmp_path):
+    """Stock 2's scrape must be able to run while stock 1 is being read: it waits for the labeller to start."""
+    import threading
+    r = load_rubric()
+    hold = load_portfolio(ROOT / "examples" / "portfolio.csv")[:2]
+    started, saw = threading.Event(), {}
+
+    class Clf(KeywordClassifier):
+        def classify(self, item, company):
+            started.set()
+            return super().classify(item, company)
+
+    class News:
+        def fetch(self, h, s, e):
+            if h.symbol == hold[1].symbol:
+                saw["labeller_already_started"] = started.wait(timeout=10)
+            return FileNews(FX / "news.json").fetch(h, s, e)
+    Pipeline(r, News(), None, None, Clf(), tmp_path / "o", tmp_path / "c.jsonl", AS_OF).run(hold)
+    assert saw["labeller_already_started"] is True
+
+
+def test_streaming_run_equals_batch_path(tmp_path):
+    r = load_rubric()
+    hold = load_portfolio(ROOT / "examples" / "portfolio.csv")
+    news = FileNews(FX / "news.json")
+    a = Pipeline(r, news, None, None, KeywordClassifier(), tmp_path / "a", tmp_path / "ca.jsonl", AS_OF).run(hold)
+    pb = Pipeline(r, news, None, None, KeywordClassifier(), tmp_path / "b", tmp_path / "cb.jsonl", AS_OF)
+    b = pb.run(hold, ingested=pb.ingest(hold))
+    assert [x.to_dict() for x in a["scores"]] == [x.to_dict() for x in b["scores"]]

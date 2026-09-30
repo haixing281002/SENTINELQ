@@ -1,4 +1,8 @@
-"""Fixed six-stage route: input -> ingest -> classify -> validate -> score -> report."""
+"""Fixed six-stage route: input -> ingest -> classify -> validate -> score -> report.
+
+Streaming and in-memory: each stock is scraped (window rolled back newest-first until 50 usable articles), its text is
+read, labelled and validated - then dropped from memory. Nothing about the articles is written to disk except the audit
+outputs (headline + URL + label). While stock N is being read, the scraper is already fetching stock N+1."""
 from __future__ import annotations
 import csv
 import json
@@ -77,24 +81,26 @@ class Pipeline:
                  narrator=None, title: str = "Portfolio", coverage: str = "",
                  max_articles: int | None = None, fetch_text: bool = False,
                  max_label_failure: float = 0.10,
-                 text_cache: str | Path = ".cache/fulltext.jsonl", ui: Display | None = None,
-                 allow_missing_news: bool = False, ingest_retry_wait: float = 60.0, prefilter: bool = True):
+                 text_cache=None, ui: Display | None = None,          # text_cache: ignored (articles are never cached)
+                 allow_missing_news: bool = False, ingest_retry_wait: float = 60.0, prefilter: bool = True,
+                 disk_cache: bool = True):
         self.r, self.news, self.actions, self.prices, self.clf = rubric, news, actions, prices, classifier
         self.out = Path(out_dir)
-        self.cache = LabelCache(cache_path)
+        self.cache = LabelCache(cache_path if disk_cache else None)   # label cache holds hash -> label only, no article text
         self.as_of = as_of or date.today()
         self.mode = mode
         self.max_articles = max_articles
         self.max_label_failure = max_label_failure
-        self.fetch_text, self.text_cache = fetch_text, text_cache
+        self.fetch_text = fetch_text
         self.narrator = narrator or TemplateNarrator()
         self.meta = {"title": title, "coverage": coverage}
         self.ui = ui or Display("off")
         self.allow_missing_news, self.ingest_retry_wait, self.prefilter = allow_missing_news, ingest_retry_wait, prefilter
         if hasattr(self.news, "on_event"):
             self.news.on_event = lambda m: self.ui.note("  " + m, "y")
+        self._key = lambda i: item_key(i.url, i.title, i.snippet, self.clf.model_id, PROMPT_VERSION)
 
-    # -- Stage 2 --------------------------------------------------------------------
+    # ---- scraping (Stage 2) --------------------------------------------------------------------------------
     def _fetch_stock(self, h):
         w = self.r["windows"]
         items, errs = [], []
@@ -109,58 +115,50 @@ class Pipeline:
             except Exception as e:  # a provider failure must be visible, not fatal
                 errs.append({"symbol": h.symbol, "provider": type(prov).__name__, "error": repr(e)})
         found = len([i for i in items if i.kind == "news"])
-        # rank by how much each article is about the company; cap spread across the months of the lookback
-        items = select_articles(items, self.max_articles, name_tokens(h))
+        items = select_articles(items, self.max_articles, toks)      # the LATEST max_articles usable ones
         return items, found, errs
 
-    def _finish_items(self, items):
+    def _prep(self, h, items):
+        """Style + parse mode; optionally read the article body (in memory only)."""
         for i in items:
             i.style = classify_style(i)
-            if i.kind == "news" and not i.parse:
-                i.parse = "headline-only"
+            i.parse = "headline-only" if i.kind == "news" else i.parse
+        if self.fetch_text:
+            from .ingest.fulltext import enrich
+            enrich(items, None, progress=self.ui.fulltext)
+            self.ui.clear_status()
         return items
 
-    def ingest(self, holdings):
+    def _scrape_all(self, holdings, on_ready=None):
+        """Scrape every stock newest-first until enough articles; hand each finished stock to `on_ready` immediately
+        (so reading/labelling overlaps with the next scrape). Failed stocks get one retry after a cool-down."""
         ui = self.ui
-        ui.stage("Ingest", "news + corporate actions per stock, deduplicated by URL")
         raw: dict[str, list[RawItem]] = {}
         errors: list[dict] = []
-        icache = Path(self.text_cache).parent / "ingest"
-        n = len(holdings)
-        w_days = self.r["windows"]["news_days"]
         failed: list = []
-        if hasattr(self.news, "prefetch"):
-            todo = [h for h in holdings if not (icache / f"{self.as_of}_{h.symbol}_{self.max_articles}.json").exists()]
-            if todo:
-                ui.note(f"  {type(self.news).__name__}: fetching all {len(todo)} companies in one request ...", "d")
-                self.news.prefetch(todo, self.as_of - timedelta(days=w_days), self.as_of)
+        n, w_days = len(holdings), self.r["windows"]["news_days"]
 
-        def show(idx, h, items, found, err_txt, from_cache, secs):
+        def show(idx, h, items, found, err_txt, secs):
             nn = [i for i in items if i.kind == "news"]
-            ui.ingest_stock(idx, n, h, found, len(nn), len(items) - len(nn), Counter(i.style for i in nn),
-                            from_cache, err_txt, secs, self.max_articles,
-                            month_spark(items, self.as_of - timedelta(days=w_days), self.as_of, ui.ascii))
+            ui.ingest_stock(idx, n, h, found, len(nn), len(items) - len(nn), Counter(i.style for i in nn), False, err_txt,
+                            secs, self.max_articles, month_spark(items, self.as_of - timedelta(days=w_days), self.as_of, ui.ascii))
 
         for idx, h in enumerate(holdings, 1):
             t0 = time.time()
-            ck = icache / f"{self.as_of}_{h.symbol}_{self.max_articles}.json"
-            cached = self._finish_items([RawItem(**d) for d in json.loads(ck.read_text(encoding="utf-8"))]) if ck.exists() else []
-            if any(i.kind == "news" for i in cached):     # cached with news: don't hit GDELT again
-                items = cached
-                raw[h.symbol] = items
-                show(idx, h, items, len([i for i in items if i.kind == "news"]), [], True, 0)
-                continue
-            ui.status(f"Ingest {idx}/{n}  {h.symbol}: fetching news ...", "ingest", idx - 1, n)
+            ui.status(f"Scraping {idx}/{n}  {h.symbol}: rolling the window back for the latest {self.max_articles or 'all'} articles ...",
+                      "ingest", idx - 1, n)
             items, found, errs = self._fetch_stock(h)
-            items = self._finish_items(items)
-            raw[h.symbol] = items
             if errs:
                 failed.append(h)
                 errors += errs
-            elif items:
-                icache.mkdir(parents=True, exist_ok=True)
-                ck.write_text(json.dumps([asdict(i) for i in items]), encoding="utf-8")
-            show(idx, h, items, found, [f"{e['provider']}: {e['error']}"[:160] for e in errs], False, time.time() - t0)
+                raw[h.symbol] = items
+                show(idx, h, self._prep_light(items), found, [f"{e['provider']}: {e['error']}"[:160] for e in errs], time.time() - t0)
+                continue
+            items = self._prep(h, items)
+            raw[h.symbol] = items
+            show(idx, h, items, found, [], time.time() - t0)
+            if on_ready:
+                on_ready(h, items)
 
         if failed:   # second pass after a cooldown, before anything is scored on missing news
             ui.note(f"  {len(failed)} stock(s) had fetch errors ({', '.join(h.symbol for h in failed)}); "
@@ -169,44 +167,46 @@ class Pipeline:
                 time.sleep(self.ingest_retry_wait)
             still = []
             for h in failed:
-                t0 = time.time()
                 items, found, errs = self._fetch_stock(h)
-                items = self._finish_items(items)
                 if errs:
                     still.append(h)
                     ui.note(f"  retry {h.symbol}: still failing - {errs[0]['error'][:120]}", "r")
                     continue
+                items = self._prep(h, items)
                 raw[h.symbol] = items
                 errors[:] = [e for e in errors if e["symbol"] != h.symbol]
-                icache.mkdir(parents=True, exist_ok=True)
-                (icache / f"{self.as_of}_{h.symbol}_{self.max_articles}.json").write_text(
-                    json.dumps([asdict(i) for i in items]), encoding="utf-8")
-                nn = [i for i in items if i.kind == "news"]
-                ui.note(f"  retry {h.symbol}: recovered {len(nn)} articles", "g")
+                ui.note(f"  retry {h.symbol}: recovered {len([i for i in items if i.kind == 'news'])} articles", "g")
+                if on_ready:
+                    on_ready(h, items)
             if still:
                 msg = (f"News could not be fetched for {len(still)} stock(s): {', '.join(h.symbol for h in still)}. "
-                       "Scoring them on corporate actions alone would understate coverage. Stocks that did fetch are cached - "
-                       "re-run the same command later to fetch only these (or pass --allow-missing-news to accept the gap).")
+                       "Scoring them on corporate actions alone would understate coverage. Re-run the same command later "
+                       "(or pass --allow-missing-news to accept the gap).")
                 if not self.allow_missing_news:
                     raise RuntimeError(msg)
                 ui.note("WARNING: " + msg, "y")
-        if self.fetch_text:
-            from .ingest.fulltext import enrich
-            ui.note("  fetching article body text for better labels (cached per URL) ...", "d")
-            enrich([i for v in raw.values() for i in v], self.text_cache, progress=ui.fulltext)
-            ui.clear_status()
-            for h in holdings:
-                ui.parse_summary(h, Counter(i.parse.split(" ")[0] + (" " + i.parse.split(" ")[1] if i.parse.startswith("headline") and len(i.parse.split(" ")) > 1 else "")
-                                            for i in raw[h.symbol] if i.kind == "news"), None)
+                for h in still:
+                    if on_ready:
+                        on_ready(h, self._prep(h, raw[h.symbol]))
         return raw, errors
 
-    # -- Stage 3 --------------------------------------------------------------------
+    def _prep_light(self, items):
+        for i in items:
+            i.style = classify_style(i)
+        return items
+
+    def ingest(self, holdings):
+        """Non-streaming scrape of all stocks (used by the file hand-off mode and tests). Nothing is stored."""
+        self.ui.stage("Ingest", "news + corporate actions per stock, latest articles first, nothing stored")
+        return self._scrape_all(holdings, None)
+
+    # ---- labelling + validation, one stock at a time (Stages 3-4) ----------------------------------------------
     def _classify_one(self, item: RawItem, company: str, bypass_cache=False):
         if item.prelabel is not None:
             return item.prelabel, json.dumps(item.prelabel), False
         if not item.url or not item.url.strip():   # nothing to cite -> don't spend a model call
             return None, "", False
-        key = item_key(item.url, item.title, item.snippet, self.clf.model_id, PROMPT_VERSION)
+        key = self._key(item)
         hit = None if bypass_cache else self.cache.get(key)
         if hit:
             return hit["label"], hit["raw"], True
@@ -215,92 +215,101 @@ class Pipeline:
             self.cache.put(key, label, raw)
         return label, raw, False
 
-    # -- Stages 3+4 -----------------------------------------------------------------
-    def classify_and_validate(self, holdings, raw):
+    def _wire_classifier(self):
+        if hasattr(self.clf, "prefetch"):
+            def persist(it, d, raw_):       # persist the LABEL immediately: an aborted run keeps its work
+                self.cache.put(self._key(it), d, raw_)
+                self.ui.item_labelled(it, d)
+            self.clf.on_label, self.clf.on_fail, self.clf.say = persist, self.ui.item_failed, self.ui.batch_note
+
+    def _label_stock(self, h, items):
+        """Read, label and validate one stock's articles; returns (kept, dropped, raw_log)."""
         ui = self.ui
-        names = {h.symbol: h.name for h in holdings}
-        pre_dropped: list[Dropped] = []
-        if self.prefilter:   # market roundups that never name the company: cheap, deterministic, and disclosed
-            hm = {h.symbol: h for h in holdings}
-            filtered = {}
-            for sym, its in raw.items():
-                toks = name_tokens(hm[sym])
-                keep = []
-                for i in its:
-                    if i.kind == "news" and i.style == "market-roundup" and not any(t in i.title.lower() for t in toks):
-                        pre_dropped.append(Dropped(sym, i.title, i.url, i.published, "prefilter", "generic_market_headline"))
-                    else:
-                        keep.append(i)
-                filtered[sym] = keep
-            raw = filtered
-        ui.stage("Classify", f"model labels each item; schema-forced, validated ({self.clf.model_id})")
-        if pre_dropped:
-            ui.note(f"  prefilter: {len(pre_dropped)} generic market-roundup headline(s) that never name the company "
-                    f"were set aside without a model call (listed in dropped.jsonl)", "d")
-        key_of = lambda i: item_key(i.url, i.title, i.snippet, self.clf.model_id, PROMPT_VERSION)
-        need = [(i, names[sym]) for sym, its in raw.items() for i in its if i.prelabel is None and i.url.strip()]
-        todo = [(i, c) for i, c in need if not self.cache.get(key_of(i))]
-        ui.label_start(len(todo), len(need) - len(todo), Counter(i.symbol for i, _ in todo))
-        if hasattr(self.clf, "prefetch"):   # batch labelling (claude-code mode)
-            def persist(it, d, raw_):       # persist immediately: an aborted run keeps its work
-                self.cache.put(key_of(it), d, raw_)
-                ui.item_labelled(it, d)
-            self.clf.on_label = persist
-            self.clf.on_fail = ui.item_failed
-            self.clf.say = ui.batch_note
-            self.clf.prefetch(todo)
         lookback = self.r["windows"]["news_days"]
-        kept: dict[str, list[LabelledItem]] = {h.symbol: [] for h in holdings}
         dropped: list[Dropped] = []
-        raw_log = []
+        if self.prefilter:   # market roundups that never name the company: cheap, deterministic, and disclosed
+            toks, keep = name_tokens(h), []
+            for i in items:
+                if i.kind == "news" and i.style == "market-roundup" and not any(t in i.title.lower() for t in toks):
+                    dropped.append(Dropped(h.symbol, i.title, i.url, i.published, "prefilter", "generic_market_headline"))
+                else:
+                    keep.append(i)
+            items = keep
+        need = [(i, h.name) for i in items if i.prelabel is None and i.url.strip()]
+        todo = [(i, c) for i, c in need if not self.cache.get(self._key(i))]
+        ui.label_start(len(todo), len(need) - len(todo), Counter(i.symbol for i, _ in todo))
         sequential = not hasattr(self.clf, "prefetch")
-        if sequential:
-            ui.note("  labelling item by item (no batching for this classifier)", "d")
-        ui.stage("Validate", "schema check; failures retried once, then dropped with a logged reason")
-        hmap = {h.symbol: h for h in holdings}
-        for sym, items in raw.items():
-            drop0, ev = len(dropped), Counter()
-            for it in items:
-                label_d, resp, cached = self._classify_one(it, names[sym])
-                if sequential and not cached and label_d is not None and it.prelabel is None:
-                    ui.item_labelled(it, label_d)
-                attempts = 1
+        if not sequential:
+            self.clf.prefetch(todo)
+        kept, raw_log, ev = [], [], Counter()
+        errs = getattr(self.clf, "errors", {})
+        for it in items:
+            label_d, resp, cached = self._classify_one(it, h.name)
+            if sequential and not cached and label_d is not None and it.prelabel is None:
+                ui.item_labelled(it, label_d)
+            attempts = 1
+            reason = validate_label(it, label_d, self.r, self.as_of, lookback)
+            if reason == "no_structured_output":
+                from .classify import item_id
+                reason = "label_failed: " + errs.get(item_id(it), "model returned no label")
+            raw_log.append({"symbol": h.symbol, "url": it.url, "attempt": 1, "cached": cached, "reason": reason, "raw": resp})
+            if reason and not reason.startswith(("missing_", "invalid_source", "date_", "not_about_company", "label_failed")):
+                # model-side failure: retry exactly once, bypassing the cache
+                label_d, resp, cached = self._classify_one(it, h.name, bypass_cache=True)
+                attempts = 2
                 reason = validate_label(it, label_d, self.r, self.as_of, lookback)
-                errs = getattr(self.clf, "errors", {})
-                if reason == "no_structured_output":
-                    from .classify import item_id
-                    reason = "label_failed: " + errs.get(item_id(it), "model returned no label")
-                raw_log.append({"symbol": sym, "url": it.url, "attempt": 1, "cached": cached,
-                                "reason": reason, "raw": resp})
-                if reason and not reason.startswith(("missing_", "invalid_source", "date_", "not_about_company", "label_failed")):
-                    # model-side failure: retry exactly once, bypassing the cache
-                    label_d, resp, cached = self._classify_one(it, names[sym], bypass_cache=True)
-                    attempts = 2
-                    reason = validate_label(it, label_d, self.r, self.as_of, lookback)
-                    raw_log.append({"symbol": sym, "url": it.url, "attempt": 2, "cached": False,
-                                    "reason": reason, "raw": resp})
-                if reason:
-                    dropped.append(Dropped(sym, it.title, it.url, it.published, "validate", reason))
-                    continue
-                kept[sym].append(LabelledItem(it, to_label(label_d), resp, cached, attempts))
-                ev[label_d["event_type"]] += 1
-            ui.stock_validated(hmap[sym], len(kept[sym]), len(items), Counter(d.reason.split(":")[0] for d in dropped[drop0:]), ev, None)
-        dropped[:0] = pre_dropped
+                raw_log.append({"symbol": h.symbol, "url": it.url, "attempt": 2, "cached": False, "reason": reason, "raw": resp})
+            if reason:
+                dropped.append(Dropped(h.symbol, it.title, it.url, it.published, "validate", reason))
+                continue
+            kept.append(LabelledItem(it, to_label(label_d), resp, cached, attempts))
+            ev[label_d["event_type"]] += 1
+        ui.stock_validated(h, len(kept), len(items), Counter(d.reason.split(":")[0] for d in dropped), ev, None)
+        for it in items:                      # the article text has served its purpose: release it
+            it.snippet = ""
         return kept, dropped, raw_log
 
-    # -- Full run -------------------------------------------------------------------
+    def classify_and_validate(self, holdings, raw):
+        """Batch form (file hand-off mode): label every stock in `raw`, one after another."""
+        self._wire_classifier()
+        self.ui.stage("Classify", f"model reads and labels each item ({self.clf.model_id}); schema-forced, validated")
+        kept, dropped, raw_log = {}, [], []
+        for h in holdings:
+            k, d, r_ = self._label_stock(h, raw[h.symbol])
+            kept[h.symbol] = k
+            dropped += d
+            raw_log += r_
+        return kept, dropped, raw_log
+
+    # ---- full run ---------------------------------------------------------------------------------------
     def run(self, holdings: list[Holding], ingested=None) -> dict:
         ui = self.ui
         ui.start({"as of": self.as_of, "classifier": self.clf.model_id, "max articles": self.max_articles or "all",
-                  "full text": "on" if self.fetch_text else "off (headline only)", "output": self.out}, holdings)
-        raw, ingest_errors = ingested or self.ingest(holdings)
-        kept, dropped, raw_log = self.classify_and_validate(holdings, raw)
+                  "full text": "on (read in memory, never saved)" if self.fetch_text else "off (headline only)",
+                  "articles stored": "none (headline+URL kept only in the report)", "output": self.out}, holdings)
+        if ingested is not None:
+            raw, ingest_errors = ingested
+            kept, dropped, raw_log = self.classify_and_validate(holdings, raw)
+        else:
+            self._wire_classifier()
+            ui.stage("Ingest", "streaming per stock: scrape newest-first -> read -> label -> validate (in memory, nothing stored)")
+            done: dict[str, tuple] = {}
+            with ThreadPoolExecutor(1) as labeller:      # reads stock N while the scraper is already on stock N+1
+                futs = {}
+                raw, ingest_errors = self._scrape_all(holdings, lambda h, items: futs.__setitem__(h.symbol, labeller.submit(self._label_stock, h, items)))
+                for sym, f in futs.items():
+                    done[sym] = f.result()
+            kept, dropped, raw_log = {}, [], []
+            for h in holdings:
+                k, d, r_ = done.get(h.symbol, ([], [], []))
+                kept[h.symbol] = k
+                dropped += d
+                raw_log += r_
         failed = [d for d in dropped if d.reason.startswith("label_failed")]
         labelable = sum(1 for v in raw.values() for i in v if i.url.strip()) or 1
         if failed:
             self.out.mkdir(parents=True, exist_ok=True)
-            (self.out / "label_failures.jsonl").write_text("\n".join(json.dumps(asdict(d)) for d in failed))
-            from collections import Counter
+            (self.out / "label_failures.jsonl").write_text("\n".join(json.dumps(asdict(d)) for d in failed), encoding="utf-8")
             top = Counter(d.reason for d in failed).most_common(3)
             msg = (f"{len(failed)}/{labelable} items could not be labelled by the model "
                    f"({len(failed) / labelable:.0%}). Top reasons: {top}. Details: {self.out}/label_failures.jsonl")
@@ -342,17 +351,17 @@ class Pipeline:
                       price_context=ctx, relative=rel, ingest_errors=ingest_errors, raw_log=raw_log)
         ui.stage("Report", "workbook, commentary per stock, portfolio observations, PDF")
         write_reports(self.out, result, self.r)
-        narr, done = {}, 0
+        narr, done_n = {}, 0
         with ThreadPoolExecutor(2) as ex:
             for sc, out in zip(scores, ex.map(lambda sc: self.narrator.holding(sc, kept[sc.symbol]), scores)):
                 narr[sc.symbol] = out
-                done += 1
-                ui.narrate(done, len(scores), sc.name)
+                done_n += 1
+                ui.narrate(done_n, len(scores), sc.name)
         ui.clear_status()
         ui.note("  writing portfolio-level observations ...", "d")
         obs = self.narrator.portfolio(portfolio_facts(scores, kept))
         result.update(narrative=narr, observations=obs)
-        (self.out / "narrative.json").write_text(json.dumps({"holdings": narr, "observations": obs}, indent=2))
+        (self.out / "narrative.json").write_text(json.dumps({"holdings": narr, "observations": obs}, indent=2), encoding="utf-8")
         build_pdf(self.out / "sentinelq_scorecard.pdf", result, self.r, narr, obs, self.meta)
         t = run["totals"]
         ui.finish({"retrieved": t["retrieved"], "kept": t["kept"], "dropped": t["dropped"],

@@ -1,39 +1,33 @@
-# GDELT: where the articles are, and how Sentinel Q gets them
+# GDELT: how Sentinel Q gets the news (free, nothing stored)
 
-## The rule we follow
+## The rule
 For every stock, **roll the search window back from the as-of date, newest first, and stop as soon as we hold 50 usable
-articles.** Those 50 are the *latest* articles. The maximum lookback stays 12 months: if fewer than 50 exist in 12 months
-we use what there is (and say so - `low confidence`). "Usable" = not a market roundup that never names the company.
+articles.** Those 50 are the *latest* articles. The maximum lookback stays 12 months: if fewer than 50 exist in 12 months we
+use what there is (and mark the stock low confidence). "Usable" = not a market roundup that never names the company.
 
-## Where GDELT keeps things (verified from GDELT's own posts via search; the blog itself is blocked in the build sandbox)
-| Place | What | Limits that matter |
-|---|---|---|
-| **DOC 2.0 API** `api.gdeltproject.org/api/v2/doc/doc` | live article search (title, URL, domain, date) | **article-list mode only considers the most recent ~3 months of whatever window you ask for**; max 250 results per request; ~1 request / 5 s / IP, else 429 |
-| **BigQuery public dataset** `gdelt-bq.gdeltv2` | full history; table `gkg_partitioned` = one row per article: `DocumentIdentifier` (URL), `SourceCommonName`, `V2Organizations` (entities + char offsets), `V2Tone`, `Extras` (holds `<PAGE_TITLE>` since Sep 2019 and `<PAGE_PRECISEPUBTIMESTAMP>`), `DATE` | billed per bytes scanned; use the `_PARTITIONTIME` filter to prune; you need a Google Cloud project + login |
-| Raw files `data.gdeltproject.org/gdeltv2/` | the same GKG as 15-minute CSVs | far too heavy for this use |
+## Free, and nothing billed
+Only the free GDELT DOC 2.0 API is used (`api.gdeltproject.org`). No Google Cloud, no BigQuery, no API keys, no billing.
 
-### Consequence for accuracy
-A single 12-month DOC API request silently returns ~3 months. Sentinel Q therefore asks **month-sized windows** (`--gdelt-slice-days`,
-default 30), newest first, merges them, and stops once 50 usable articles are collected. Typical large caps need 1-3 windows.
+## Why month-sized windows
+GDELT's article-list mode only considers the most recent ~3 months of whatever window is requested (verified from GDELT's own
+posts via search), and returns at most 250 per request. A single 12-month request would silently return ~3 months. So the
+client asks windows of `--gdelt-slice-days` (default 30) from the as-of date backwards and stops as soon as enough usable
+articles are in hand - typically 1-3 requests for a large cap.
+Politeness: ~8 s between requests, exponential backoff on 429/5xx or GDELT's plain-text "please limit requests" reply
+(honouring `Retry-After`), and it **raises** rather than reading a rate limit as "no news".
 
-## Two routes
-1. `--news gdelt` (default): DOC API, rolling back month by month. No login. Paced (~8 s/request), backs off on 429, retries,
-   and **raises** rather than reading a rate limit as "no news".
-2. `--news gdelt-bq` (recommended for accuracy): BigQuery, one query for the whole portfolio and the full 12 months.
-   * An article is kept for a company only if the company (exact name/alias, from `portfolio/universe.csv` `aliases`) is in its
-     organisation list **and** (it is in the page title **or** it is mentioned >= 2 times). A roundup listing 30 stocks once never
-     qualifies. Title-in-headline and mention count become the relevance rank.
-   * Cost safety: a **dry run** prints GB scanned and an estimated $ first; it stops if above `--bq-max-gb` (default 300);
-     the real job is hard-capped with `maximum_bytes_billed`; the result is cached in `.cache/bq/` so re-runs cost nothing.
-   * Setup (once): `pip install -e ".[bq]"`, install the Google Cloud SDK, `gcloud auth application-default login`,
-     then `--bq-project <your-project-id>` (or env `GOOGLE_CLOUD_PROJECT`). In Google Colab: `from google.colab import auth; auth.authenticate_user()`.
+## Nothing is stored
+The pipeline streams: **scrape stock N -> read its articles -> label -> validate -> release**, while the scraper is already on
+stock N+1 (the slow GDELT waits overlap with model time). Article text is held in memory only and discarded after labelling.
+* **Never written to disk:** article bodies, the scraped article lists, GDELT responses. (`--fetch-text` reads bodies in memory.)
+* **Written (needed for the audit trail):** the report outputs - each evidence row is headline + date + URL + the model's label and
+  one-line rationale (`evidence.json`, xlsx, PDF, `dropped.jsonl`), plus `work/run.log` and `work/claude_batches.jsonl` (ids and the
+  first 300 characters of model replies - labels, not articles).
+* **Label cache (`.cache/labels.jsonl`):** hash -> label only. It makes re-runs repeatable and lets an interrupted run skip
+  already-labelled items. It contains no article text. Use `--no-disk-cache` to keep even this in memory (then nothing is
+  cached anywhere; a re-run re-scrapes and re-labels everything).
 
-```bash
-sentinelq --portfolio portfolio/stocks_given.tsv --news gdelt-bq --bq-project my-project --max-articles 50 --fetch-text ...
-```
-
-## What is verified vs assumed
-* Verified (GDELT posts, via search): the ~3-month artlist behaviour, 250-per-request max, `gkg_partitioned` and its columns, `_PARTITIONTIME`
-  pruning, `PAGE_TITLE` in `Extras` since Sept 2019.
-* Not verified here (no network to GDELT/Google from the build sandbox): live query behaviour, exact bytes a 12-month scan costs
-  (the dry run tells you before anything is billed), and the BigQuery free-tier allowance on your account.
+## Trade-off to know about
+Because nothing is cached, an interrupted or failed run re-scrapes from GDELT next time (labels are still reused unless
+`--no-disk-cache`). If GDELT keeps rate-limiting a stock, the run stops before scoring and names it; re-run later, or pass
+`--allow-missing-news` to accept the gap.

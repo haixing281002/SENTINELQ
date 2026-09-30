@@ -20,10 +20,8 @@ def main(argv=None):
     p.add_argument("--classifier", choices=["claude-code", "file", "anthropic", "keyword"], default="claude-code",
                    help="claude-code: local `claude -p`, no API key (default); file: hand-off files; anthropic: API key; keyword: offline stub")
     p.add_argument("--model", default=None, help="Anthropic model id (or env SENTINELQ_MODEL)")
-    p.add_argument("--news", choices=["gdelt", "gdelt-bq", "file"], default="gdelt",
-                   help="gdelt = DOC API, month-by-month (no login, slow); gdelt-bq = Google BigQuery (best: full year, ranked by relevance)")
-    p.add_argument("--bq-project", default=None, help="Google Cloud project id billed for BigQuery (or env GOOGLE_CLOUD_PROJECT)")
-    p.add_argument("--bq-max-gb", type=float, default=300.0, help="abort BigQuery if the dry run exceeds this many GB (hard cap on cost)")
+    p.add_argument("--news", choices=["gdelt", "file"], default="gdelt",
+                   help="gdelt = free GDELT DOC API, rolling back newest-first until enough articles; file = your own JSON")
     p.add_argument("--gdelt-slice-days", type=int, default=30, help="DOC API window size; smaller = more complete, slower")
     p.add_argument("--news-file")
     p.add_argument("--actions", choices=["yahoo", "file", "none"], default="yahoo")
@@ -44,6 +42,7 @@ def main(argv=None):
     p.add_argument("--ascii", action="store_true", help="ASCII bars (#---) instead of block characters")
     p.add_argument("--allow-missing-news", action="store_true", help="continue even if news fetch failed for some stocks")
     p.add_argument("--no-prefilter", action="store_true", help="send generic market-roundup headlines to the model too")
+    p.add_argument("--no-disk-cache", action="store_true", help="keep even the label/prose caches in memory only (nothing cached on disk)")
     p.add_argument("--fetch-text", action="store_true", help="fetch article body text (better labels than headlines)")
     p.add_argument("--work", default="work", help="dir for hand-off files (file mode)")
     a = p.parse_args(argv)
@@ -54,10 +53,6 @@ def main(argv=None):
 
     if a.news == "file":
         news = FileNews(a.news_file)
-    elif a.news == "gdelt-bq":
-        import os
-        from .ingest.bq import GdeltBigQuery
-        news = GdeltBigQuery(a.bq_project or os.environ.get("GOOGLE_CLOUD_PROJECT"), a.bq_max_gb)
     else:
         from .ingest.gdelt import GdeltNews
         news = GdeltNews(slice_days=a.gdelt_slice_days)
@@ -108,7 +103,7 @@ def main(argv=None):
     else:
         inner = TemplateNarrator()
     narrator = inner if nmode == "file" else CachedNarrator(
-        inner, Path(a.cache).with_name("narrative.jsonl"), getattr(inner, "model_id", "template"))
+        inner, None if a.no_disk_cache else Path(a.cache).with_name("narrative.jsonl"), getattr(inner, "model_id", "template"))
     out = Path(a.out or f"runs/{as_of.isoformat()}")
     if a.pick:
         from .pipeline import pick_holdings
@@ -120,7 +115,8 @@ def main(argv=None):
     pipe = Pipeline(r, news, actions, prices, clf, out, a.cache, as_of, a.mode,
                     narrator, a.title, a.coverage, a.max_articles, a.fetch_text,
                     1.01 if a.allow_partial_labels else 0.10, ui=ui,
-                    allow_missing_news=a.allow_missing_news, prefilter=not a.no_prefilter)
+                    allow_missing_news=a.allow_missing_news, prefilter=not a.no_prefilter,
+                    disk_cache=not a.no_disk_cache)
     from .resolve import enrich
     holdings = enrich(holdings, a.universe, mode="none" if a.classifier in ("keyword", "file") else "claude-code", model=a.model)
     ingested = None

@@ -52,4 +52,4 @@ Deliberate fixes vs the reference: rupee shown as "Rs" (the reference printed bl
 ("Lookbac/k", "Larg/e"), true minus signs.
 
 ## News retrieval
-Rolling window: newest first, stop at the latest 50 usable articles per stock, 12-month max. Routes: `--news gdelt` (DOC API, month-by-month) or `--news gdelt-bq` (Google BigQuery, recommended). Details, limits and cost controls: `docs/GDELT.md`.
+Free GDELT DOC API only. Rolling window: newest first, stop at the latest 50 usable articles per stock, 12-month max. Articles are streamed and read in memory - never stored. Details: `docs/GDELT.md`.

@@ -39,8 +39,7 @@ one_line_read, key_corporate_action, coverage_note}, "_observations": [{title, b
 * The npm install creates `claude.cmd`; the tool finds it automatically (also via `CLAUDE_BIN`, `%APPDATA%\npm`).
   If not found it stops within seconds with instructions - it no longer runs for 10 minutes first.
 * Prompts are sent as UTF-8, so company names / symbols never break on the Windows code page.
-* Fetched articles are cached in `.cache/ingest/` and `.cache/fulltext.jsonl`, so a failed or repeated run does not
-  re-download them. Labels are cached in `.cache/labels.jsonl` only when the model actually returned one.
+* Articles are never cached on disk (see `docs/GDELT.md`); only labels are, so a failed run re-scrapes but reuses labels.
 
 ## If labelling fails (`label_failed`)
 * Every claude call is logged to `work/claude_batches.jsonl` (ids, error text, first 300 chars of each reply).
@@ -72,13 +71,6 @@ Labelling ████████░░░░░░░░░░░░░░░�
   terminal: `tail -f work/run.log`. Inside Claude Code, ask it to run the command in the background and tail that log.
 
 ## GDELT rate limits and missing news
-* The GDELT client paces itself (~8s between requests, slower after a limit), backs off on HTTP 429 / 5xx / its plain-text
-  "please limit requests" reply (honouring `Retry-After`), and **raises** if it cannot get an answer - a rate limit is never
-  read as "no news". Retries are shown in the run display and `work/run.log`.
-* Stocks whose fetch failed get one more attempt after a 60s cool-down at the end of ingest. If any still fail, the run stops
-  before scoring (so they are not scored on corporate actions alone). Stocks that did fetch are cached in `.cache/ingest/`;
-  re-run the same command later and only the failed ones are fetched. `--allow-missing-news` overrides.
-* Cache entries containing no news are treated as suspect and refetched.
-* Generic market roundups ("Sensex ends 250 pts lower") that never name the company are set aside before labelling, saving
-  model calls; each is listed in `dropped.jsonl` as `generic_market_headline`. Roundups that do name the company still go to
-  the model, which decides relevance (`not_about_company`). Disable with `--no-prefilter`.
+See `docs/GDELT.md`. In short: paced, backs off on 429, never reads a rate limit as "no news"; stocks that fail get one retry after a
+60 s cool-down; if any still fail the run stops before scoring (override: `--allow-missing-news`). Generic market roundups that never
+name the company are set aside before labelling and listed as `generic_market_headline` in `dropped.jsonl` (`--no-prefilter` disables).

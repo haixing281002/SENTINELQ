@@ -81,6 +81,3 @@ def month_spark(items: list, start, end, ascii_only: bool = False) -> tuple[str,
         span += f" ({(date.fromisoformat(dates[-1]) - date.fromisoformat(dates[0])).days + 1} days rolled back)"
     return bar, f"{months[0]}..{months[-1]}  {span}"
 
-
-def dedupe_key(url: str) -> str:
-    return (url or "").strip().lower().rstrip("/")

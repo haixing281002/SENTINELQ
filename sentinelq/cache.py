@@ -10,11 +10,15 @@ def item_key(url: str, title: str, snippet: str, model: str, prompt_version: str
 
 
 class LabelCache:
-    def __init__(self, path: str | Path):
-        self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+    """key (hash) -> label + the model's short JSON reply. No article text is ever stored. path=None -> memory only."""
+    def __init__(self, path: str | Path | None):
+        import threading
+        self._lock = threading.Lock()
+        self.path = Path(path) if path else None
+        if self.path:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
         self._d: dict[str, dict] = {}
-        if self.path.exists():
+        if self.path and self.path.exists():
             for line in self.path.read_text().splitlines():
                 if line.strip():
                     r = json.loads(line)
@@ -25,6 +29,8 @@ class LabelCache:
 
     def put(self, key: str, label: dict, raw: str):
         rec = {"key": key, "label": label, "raw": raw}
-        self._d[key] = rec
-        with self.path.open("a") as f:
-            f.write(json.dumps(rec) + "\n")
+        with self._lock:
+            self._d[key] = rec
+            if self.path:
+                with self.path.open("a", encoding="utf-8") as f:
+                    f.write(json.dumps(rec, ensure_ascii=False) + "\n")

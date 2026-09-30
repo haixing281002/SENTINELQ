@@ -200,13 +200,14 @@ class CachedNarrator:
     def __init__(self, inner, path, model_id="template"):
         import hashlib
         self.inner, self.model_id, self._h = inner, model_id, hashlib
-        self.path = pathlib.Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path = pathlib.Path(path) if path else None
+        if self.path:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
         import threading
         self._lock = threading.Lock()
         self._d = {}
-        if self.path.exists():
-            for line in self.path.read_text().splitlines():
+        if self.path and self.path.exists():
+            for line in self.path.read_text(encoding="utf-8").splitlines():
                 if line.strip():
                     r = json.loads(line)
                     self._d[r["key"]] = r["value"]
@@ -217,8 +218,9 @@ class CachedNarrator:
             val = fn()
             with self._lock:
                 self._d[key] = val
-                with self.path.open("a", encoding="utf-8") as f:
-                    f.write(json.dumps({"key": key, "value": val}, ensure_ascii=False) + "\n")
+                if self.path:
+                    with self.path.open("a", encoding="utf-8") as f:
+                        f.write(json.dumps({"key": key, "value": val}, ensure_ascii=False) + "\n")
         return self._d[key]
 
     def holding(self, s, items):
