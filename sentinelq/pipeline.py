@@ -36,12 +36,14 @@ class Pipeline:
     def __init__(self, rubric: Rubric, news, actions, prices, classifier: Classifier,
                  out_dir: str | Path, cache_path: str | Path = ".cache/labels.jsonl",
                  as_of: date | None = None, mode: str = "absolute",
-                 narrator=None, title: str = "Portfolio", coverage: str = ""):
+                 narrator=None, title: str = "Portfolio", coverage: str = "",
+                 max_articles: int | None = None):
         self.r, self.news, self.actions, self.prices, self.clf = rubric, news, actions, prices, classifier
         self.out = Path(out_dir)
         self.cache = LabelCache(cache_path)
         self.as_of = as_of or date.today()
         self.mode = mode
+        self.max_articles = max_articles
         self.narrator = narrator or TemplateNarrator()
         self.meta = {"title": title, "coverage": coverage}
 
@@ -59,6 +61,9 @@ class Pipeline:
                     items += prov.fetch(h, self.as_of - timedelta(days=days), self.as_of)
                 except Exception as e:  # a provider failure must be visible, not fatal
                     errors.append({"symbol": h.symbol, "provider": type(prov).__name__, "error": repr(e)})
+            if self.max_articles:   # cap news per company, newest first; actions are never capped
+                news = sorted((i for i in items if i.kind == "news"), key=lambda i: i.published, reverse=True)
+                items = news[:self.max_articles] + [i for i in items if i.kind != "news"]
             raw[h.symbol] = items
         return raw, errors
 

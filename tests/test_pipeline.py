@@ -96,3 +96,12 @@ def test_governance_rubric_variants():
 def test_pdf_written(tmp_path):
     run(tmp_path)
     assert (tmp_path / "out" / "sentinelq_scorecard.pdf").stat().st_size > 5000
+
+
+def test_max_articles_cap(tmp_path):
+    r = load_rubric()
+    p = Pipeline(r, FileNews(FX / "news.json"), None, None, KeywordClassifier(), tmp_path / "o",
+                 tmp_path / "c.jsonl", AS_OF, max_articles=1)
+    res = p.run(load_portfolio(ROOT / "examples" / "portfolio.csv"))
+    assert all(sum(li.item.kind == "news" for li in v) <= 1 for v in res["kept"].values())
+    assert res["run"]["totals"]["retrieved"] == 3   # one per company

@@ -24,6 +24,7 @@ def main(argv=None):
     p.add_argument("--actions-file")
     p.add_argument("--prices", choices=["yahoo", "file", "none"], default="yahoo")
     p.add_argument("--prices-file")
+    p.add_argument("--max-articles", type=int, default=None, help="cap news items per company (newest first)")
     p.add_argument("--title", default="Portfolio", help="report title, e.g. 'QVM Portfolio'")
     p.add_argument("--coverage", default="", help="coverage blurb on page 1")
     p.add_argument("--narrator", choices=["anthropic", "template"], default=None,
@@ -38,7 +39,7 @@ def main(argv=None):
         news = FileNews(a.news_file)
     else:
         from .ingest.gdelt import GdeltNews
-        news = GdeltNews()
+        news = GdeltNews(max_records=max(a.max_articles or 100, 1))
     if a.actions == "file":
         actions = FileActions(a.actions_file)
     elif a.actions == "yahoo":
@@ -68,7 +69,7 @@ def main(argv=None):
                               getattr(inner, "model_id", "template"))
     out = Path(a.out or f"runs/{as_of.isoformat()}")
     res = Pipeline(r, news, actions, prices, clf, out, a.cache, as_of, a.mode,
-                   narrator, a.title, a.coverage).run(load_portfolio(a.portfolio))
+                   narrator, a.title, a.coverage, a.max_articles).run(load_portfolio(a.portfolio))
     t = res["run"]["totals"]
     print(f"Done. retrieved={t['retrieved']} kept={t['kept']} dropped={t['dropped']} -> {out}/sentinelq_scorecard.pdf (+ xlsx)")
     for s in res["scores"]:
