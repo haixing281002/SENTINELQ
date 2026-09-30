@@ -9,7 +9,9 @@ from .rubric import load_rubric
 
 def main(argv=None):
     p = argparse.ArgumentParser(prog="sentinelq", description="Sentinel Q pipeline")
-    p.add_argument("--portfolio", required=True, help="CSV with symbol,name,sector")
+    p.add_argument("--portfolio", help="CSV with symbol,name,sector[,cap,weight]")
+    p.add_argument("--pick", help="comma-separated names/tickers to look up in --universe (equal-weighted)")
+    p.add_argument("--universe", default="portfolio/universe.csv")
     p.add_argument("--out", default=None, help="output dir (default runs/<as_of>)")
     p.add_argument("--as-of", default=None, help="YYYY-MM-DD (default today)")
     p.add_argument("--rubric", default=None)
@@ -86,7 +88,13 @@ def main(argv=None):
     narrator = inner if nmode == "file" else CachedNarrator(
         inner, Path(a.cache).with_name("narrative.jsonl"), getattr(inner, "model_id", "template"))
     out = Path(a.out or f"runs/{as_of.isoformat()}")
-    holdings = load_portfolio(a.portfolio)
+    if a.pick:
+        from .pipeline import pick_holdings
+        holdings = pick_holdings(a.universe, [x.strip() for x in a.pick.split(",") if x.strip()])
+    elif a.portfolio:
+        holdings = load_portfolio(a.portfolio)
+    else:
+        p.error("give --portfolio or --pick")
     pipe = Pipeline(r, news, actions, prices, clf, out, a.cache, as_of, a.mode,
                     narrator, a.title, a.coverage, a.max_articles, a.fetch_text)
     ingested = None

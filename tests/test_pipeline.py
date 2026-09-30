@@ -136,3 +136,13 @@ def test_irrelevant_items_dropped(tmp_path):
     it = RawItem("X", "news", "t", "", "https://a.b/c", "2026-06-01")
     lab = {"event_type": "other", "sentiment": 0, "rationale": "x", "governance_flag": False, "about_company": False}
     assert validate_label(it, lab, r, AS_OF, 365) == "not_about_company"
+
+
+def test_pick_by_name(tmp_path):
+    import pytest
+    from sentinelq.pipeline import pick_holdings
+    u = ROOT / "portfolio" / "universe.csv"
+    h = pick_holdings(u, ["angel one", "TITAN"])
+    assert [x.symbol for x in h] == ["ANGELONE", "TITAN"] and h[0].weight == "50.00%"
+    with pytest.raises(SystemExit):
+        pick_holdings(u, ["Nonexistent Corp"])

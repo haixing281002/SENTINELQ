@@ -38,3 +38,8 @@ governance counts each event type once per stock; sector sentiment pools URL-ded
 half-life 60 trading days converted from calendar days at 252/365; low-confidence flag under 3 news items.
 
 Prose in the PDF (rationales, one-line reads, observations) is written by the model from the evidence only, cached by evidence hash, and cannot alter scores; `--narrator template` gives a deterministic offline version.
+
+## Skills (for Claude Code)
+`.claude/skills/sentinelq` (full scorecard for any stock names) and `.claude/skills/sentinelq-governance` (governance
+score with arithmetic) are project skills: they load automatically whenever Claude Code is opened in this repo.
+Quick run for typed names: `sentinelq --pick "Angel One, Titan Company"` (resolves against `portfolio/universe.csv`).

@@ -32,6 +32,34 @@ def load_portfolio(path: str | Path) -> list[Holding]:
                 for r in rd if r[cols["symbol"]].strip()]
 
 
+def _norm(x: str) -> str:
+    import re
+    return re.sub(r"[^a-z0-9]+", " ", x.lower()).strip()
+
+
+def pick_holdings(universe: str | Path, queries: list[str]) -> list[Holding]:
+    """Resolve typed names/tickers against the universe file; unknown names raise with instructions."""
+    uni = load_portfolio(universe)
+    extra = {}
+    with open(universe, newline="", encoding="utf-8-sig") as f:
+        for r in csv.DictReader(f):
+            extra[r["symbol"]] = [a for a in (r.get("aliases") or "").split("|") if a]
+    out, missing = [], []
+    for q in queries:
+        nq = _norm(q)
+        hit = [h for h in uni if nq in (_norm(h.symbol), _norm(h.name)) or nq in [_norm(a) for a in extra[h.symbol]]]
+        hit = hit or [h for h in uni if nq and (nq in _norm(h.name) or _norm(h.name) in nq)]
+        if len(hit) == 1:
+            out.append(hit[0])
+        else:
+            missing.append(f"{q!r} ({'ambiguous: ' + ', '.join(h.symbol for h in hit) if hit else 'not in universe'})")
+    if missing:
+        raise SystemExit("Cannot resolve: " + "; ".join(missing) +
+                         f". Add a row (symbol,name,sector,cap,weight,aliases) to {universe} and retry.")
+    w = f"{100 / len(out):.2f}%"
+    return [Holding(h.symbol, h.name, h.sector, h.cap, w) for h in out]
+
+
 class Pipeline:
     def __init__(self, rubric: Rubric, news, actions, prices, classifier: Classifier,
                  out_dir: str | Path, cache_path: str | Path = ".cache/labels.jsonl",
