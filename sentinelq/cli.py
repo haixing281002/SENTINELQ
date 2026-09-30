@@ -10,7 +10,7 @@ from .rubric import load_rubric
 def main(argv=None):
     p = argparse.ArgumentParser(prog="sentinelq", description="Sentinel Q pipeline")
     p.add_argument("--portfolio", help="CSV with symbol,name,sector[,cap,weight]")
-    p.add_argument("--pick", help="comma-separated names/tickers to look up in --universe (equal-weighted)")
+    p.add_argument("--pick", help="comma-separated names/tickers to look up in --universe")
     p.add_argument("--universe", default="portfolio/universe.csv")
     p.add_argument("--out", default=None, help="output dir (default runs/<as_of>)")
     p.add_argument("--as-of", default=None, help="YYYY-MM-DD (default today)")

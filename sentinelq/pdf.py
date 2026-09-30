@@ -113,19 +113,29 @@ def build_pdf(path: Path, res: dict, rubric, narr: dict, observations: list[dict
 
     # ---- Scorecard table
     st += [P(f"Scorecard — all {n} holdings", H1), P("Sorted by sentiment score (high to low), then by governance score.", SUB)]
-    hdr = ["Company", "Cap", "Sector", "Wt", "Sent.", "Gov.", "Label", "Key corporate action", "One-line read"]
-    data = [[P(h, CELLB) for h in hdr]]
+    has_cap, has_wt = any(x.cap for x in scores), any(x.weight for x in scores)   # optional display columns
+    cols = [("Company", .15, lambda s, nr: P(s.name, CELLB)),
+            ("Cap", .06, lambda s, nr: P(s.cap, CELL)),
+            ("Sector", .10, lambda s, nr: P(s.sector, CELL)),
+            ("Wt", .05, lambda s, nr: P(s.weight, CELL)),
+            ("Sent.", .05, lambda s, nr: P(sent_txt(s.company_sentiment), CELLB)),
+            ("Gov.", .05, lambda s, nr: P(f"{s.governance_score:g}", CELL)),
+            ("Label", .06, lambda s, nr: P(s.governance_label.upper() if s.governance_label == "Flag" else s.governance_label, CELLB)),
+            ("Key corporate action", .30, lambda s, nr: P(nr["key_corporate_action"], CELL)),
+            ("One-line read", .20, lambda s, nr: P(nr["one_line_read"], CELL))]
+    cols = [c for c in cols if not (c[0] == "Cap" and not has_cap) and not (c[0] == "Wt" and not has_wt)]
+    tot = sum(c[1] for c in cols)
+    li = [c[0] for c in cols].index("Label")
+    data = [[P(c[0], CELLB) for c in cols]]
     style = [("BACKGROUND", (0, 0), (-1, 0), GREY), ("LINEBELOW", (0, 0), (-1, -1), .25, colors.lightgrey),
              ("VALIGN", (0, 0), (-1, -1), "TOP"), ("TOPPADDING", (0, 0), (-1, -1), 3), ("BOTTOMPADDING", (0, 0), (-1, -1), 3)]
     for i, s in enumerate(scores, 1):
         nr = narr[s.symbol]
-        lab = s.governance_label.upper() if s.governance_label == "Flag" else s.governance_label
-        data.append([P(s.name, CELLB), P(s.cap, CELL), P(s.sector, CELL), P(s.weight, CELL), P(sent_txt(s.company_sentiment), CELLB),
-                     P(f"{s.governance_score:g}", CELL), P(lab, CELLB), P(nr["key_corporate_action"], CELL), P(nr["one_line_read"], CELL)])
-        style.append(("BACKGROUND", (6, i), (6, i), LABEL_BG[s.governance_label]))
+        data.append([c[2](s, nr) for c in cols])
+        style.append(("BACKGROUND", (li, i), (li, i), LABEL_BG[s.governance_label]))
         if s.governance_label == "Flag":
-            style.append(("BACKGROUND", (0, i), (5, i), LABEL_BG["Flag"]))
-    t = Table(data, repeatRows=1, colWidths=[W * f for f in (.14, .06, .1, .05, .05, .05, .06, .29, .20)])
+            style.append(("BACKGROUND", (0, i), (li - 1, i), LABEL_BG["Flag"]))
+    t = Table(data, repeatRows=1, colWidths=[W * c[1] / tot for c in cols])
     t.setStyle(TableStyle(style))
     st += [t, Spacer(1, 8), P("Portfolio-level observations", H2)]
     for o in observations:

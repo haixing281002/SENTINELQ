@@ -56,8 +56,7 @@ def pick_holdings(universe: str | Path, queries: list[str]) -> list[Holding]:
     if missing:
         raise SystemExit("Cannot resolve: " + "; ".join(missing) +
                          f". Add a row (symbol,name,sector,cap,weight,aliases) to {universe} and retry.")
-    w = f"{100 / len(out):.2f}%"
-    return [Holding(h.symbol, h.name, h.sector, h.cap, w) for h in out]
+    return [Holding(h.symbol, h.name, h.sector, h.cap, "") for h in out]
 
 
 class Pipeline:

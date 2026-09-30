@@ -42,4 +42,4 @@ Prose in the PDF (rationales, one-line reads, observations) is written by the mo
 ## Skills (for Claude Code)
 `.claude/skills/sentinelq` (full scorecard for any stock names) and `.claude/skills/sentinelq-governance` (governance
 score with arithmetic) are project skills: they load automatically whenever Claude Code is opened in this repo.
-Quick run for typed names: `sentinelq --pick "Angel One, Titan Company"` (resolves against `portfolio/universe.csv`).
+Quick run for typed names: `sentinelq --pick "Angel One, Titan Company"` (resolves against `portfolio/universe.csv`; no weights needed - Cap/Wt columns show only if you supply them).

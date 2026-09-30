@@ -13,8 +13,8 @@ Never invent or hand-adjust a score. To change a score, change the rubric (and s
 1. **Resolve names.** `portfolio/universe.csv` holds known stocks (symbol, name, sector, cap). Try
    `sentinelq --pick "Angel One, Titan Company" ...`. If it says "not in universe", work out the NSE ticker
    (Yahoo form = ticker + `.NS`), the company name as used in news, sector and cap, **confirm with the user if unsure**,
-   append a row to `portfolio/universe.csv`, and retry. Weights default to equal-weight; use `--portfolio` with a CSV
-   (`symbol,name,sector,cap,weight`) if the user supplies weights.
+   append a row to `portfolio/universe.csv`, and retry. Weights are never needed (they don't affect any score); the Wt/Cap columns
+   appear in the PDF only if the user supplies them in a `--portfolio` CSV.
 2. **Run** (no API key needed; uses the logged-in `claude` CLI):
    ```bash
    pip install -e ".[prices]"      # first time only

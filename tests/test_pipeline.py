@@ -143,6 +143,6 @@ def test_pick_by_name(tmp_path):
     from sentinelq.pipeline import pick_holdings
     u = ROOT / "portfolio" / "universe.csv"
     h = pick_holdings(u, ["angel one", "TITAN"])
-    assert [x.symbol for x in h] == ["ANGELONE", "TITAN"] and h[0].weight == "50.00%"
+    assert [x.symbol for x in h] == ["ANGELONE", "TITAN"] and h[0].weight == ""
     with pytest.raises(SystemExit):
         pick_holdings(u, ["Nonexistent Corp"])
