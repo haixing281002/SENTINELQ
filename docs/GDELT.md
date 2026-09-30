@@ -31,3 +31,11 @@ stock N+1 (the slow GDELT waits overlap with model time). Article text is held i
 Because nothing is cached, an interrupted or failed run re-scrapes from GDELT next time (labels are still reused unless
 `--no-disk-cache`). If GDELT keeps rate-limiting a stock, the run stops before scoring and names it; re-run later, or pass
 `--allow-missing-news` to accept the gap.
+
+## If GDELT answers 429 (rate limit)
+* Before scraping, one tiny **health-check request** runs. If GDELT is refusing this machine, the run stops within about a minute
+  with instructions - it does not grind through all the stocks.
+* If 3 stocks in a row fail, it stops (hammering a throttled service only makes the limit last longer). `--allow-missing-news` overrides.
+* **Check for leftover runs first.** Stopping a task can leave the Python process alive; each old run keeps calling GDELT from your
+  IP. PowerShell: `Get-Process python*, sentinelq* | Stop-Process -Force`. Run only one instance at a time.
+* Then wait 10-15 minutes and re-run the same command.

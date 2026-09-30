@@ -73,6 +73,15 @@ def pick_holdings(universe: str | Path, queries: list[str]) -> list[Holding]:
                          f". Add a row (symbol,name,sector,cap,weight,aliases) to {universe} and retry.")
     return [Holding(h.symbol, h.name, h.sector, h.cap, "", h.aliases) for h in out]
 
+THROTTLE_HELP = (
+    "GDELT is refusing requests from this machine (HTTP 429 / rate limit). Nothing was scored. What to do:\n"
+    "  1. Make sure no earlier run is still going - stopping a task can leave the Python process alive and every old run keeps\n"
+    "     hitting GDELT from your IP. Windows PowerShell:  Get-Process python*, sentinelq* | Stop-Process -Force\n"
+    "     (or Task Manager -> Details -> end python.exe / sentinelq.exe).\n"
+    "  2. Wait 10-15 minutes so GDELT's limit clears, then re-run the same command (labels already obtained are reused).\n"
+    "  3. Only ever run one instance at a time; a different network (e.g. phone hotspot) also works if your IP stays limited."
+)
+
 
 class Pipeline:
     def __init__(self, rubric: Rubric, news, actions, prices, classifier: Classifier,
@@ -137,6 +146,18 @@ class Pipeline:
         errors: list[dict] = []
         failed: list = []
         n, w_days = len(holdings), self.r["windows"]["news_days"]
+        if hasattr(self.news, "probe"):
+            ui.status("Checking that GDELT is answering ...", "ingest", 0, n)
+            try:
+                self.news.probe()
+            except Exception as e:
+                ui.clear_status()
+                from .ingest.gdelt import GdeltRateLimited
+                if isinstance(e, GdeltRateLimited):
+                    raise RuntimeError(f"{THROTTLE_HELP}\n(health check: {e})") from e
+                raise RuntimeError(f"GDELT health check failed: {e!r}. Check your internet connection / proxy, then re-run.") from e
+            ui.clear_status()
+        consecutive = 0
 
         def show(idx, h, items, found, err_txt, secs):
             nn = [i for i in items if i.kind == "news"]
@@ -152,8 +173,13 @@ class Pipeline:
                 failed.append(h)
                 errors += errs
                 raw[h.symbol] = items
+                consecutive += 1
                 show(idx, h, self._prep_light(items), found, [f"{e['provider']}: {e['error']}"[:160] for e in errs], time.time() - t0)
+                if consecutive >= 3 and not self.allow_missing_news:      # hammering a throttled service only prolongs the limit
+                    raise RuntimeError(f"{THROTTLE_HELP}\n(3 stocks in a row failed: {', '.join(x.symbol for x in failed[-3:])}; "
+                                       f"last error: {errs[0]['error'][:140]})")
                 continue
+            consecutive = 0
             items = self._prep(h, items)
             raw[h.symbol] = items
             show(idx, h, items, found, [], time.time() - t0)

@@ -19,7 +19,11 @@ RETRY_CODES = (429, 500, 502, 503, 504)
 
 
 class GdeltRateLimited(RuntimeError):
-    pass
+    """GDELT answered, but with a rate-limit / server-busy reply."""
+
+
+class GdeltUnreachable(RuntimeError):
+    """No answer at all (offline, DNS, proxy, timeout)."""
 
 
 class GdeltNews:
@@ -45,7 +49,7 @@ class GdeltNews:
         self._last = time.time()
 
     def _get(self, url: str, label: str) -> str:
-        last = ""
+        last, kind = "", "limit"
         for attempt in range(self.retries + 1):
             self._pace()
             wait = self.backoff
@@ -53,21 +57,27 @@ class GdeltNews:
                 with self.opener(url, timeout=self.timeout) as r:
                     body = r.read().decode("utf-8", "replace")
             except urllib.error.HTTPError as e:
-                last = f"HTTP {e.code}"
+                last, kind = f"HTTP {e.code}", "limit"
                 if e.code not in RETRY_CODES:
                     raise
                 ra = e.headers.get("Retry-After") if e.headers else None
                 wait = float(ra) if ra and ra.replace(".", "", 1).isdigit() else wait
             except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
-                last = f"{type(e).__name__}: {e}"
+                last, kind = f"{type(e).__name__}: {e}", "network"
             else:
                 if body.lstrip()[:1] in ("{", "[") or not body.strip():
                     return body
-                last = "rate-limit notice: " + body.strip()[:80]
+                last, kind = "rate-limit notice: " + body.strip()[:80], "limit"
             if attempt < self.retries:
                 self._say(f"[GDELT] {label}: {last} - waiting {wait:.0f}s (retry {attempt + 1}/{self.retries})")
                 self.sleep(min(wait, 120))
-        raise GdeltRateLimited(f"GDELT gave no usable answer for {label} after {self.retries + 1} attempts ({last})")
+        exc = GdeltRateLimited if kind == "limit" else GdeltUnreachable
+        raise exc(f"GDELT gave no usable answer for {label} after {self.retries + 1} attempts ({last})")
+
+    def probe(self) -> None:
+        """One tiny request before the run starts: if GDELT is refusing this machine, say so now - not after 29 stocks."""
+        url = f"{API}?{urllib.parse.urlencode({'query': 'economy sourcelang:english', 'mode': 'artlist', 'format': 'json', 'maxrecords': 1, 'timespan': '1h'})}"
+        self._get(url, "health check")
 
     def _query(self, h: Holding) -> str:
         from .select import aliases_of

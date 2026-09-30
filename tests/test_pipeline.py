@@ -416,6 +416,8 @@ def _doc_opener(per_window):
 
     def opener(url, timeout=30):
         q = up.parse_qs(up.urlparse(url).query)
+        if "startdatetime" not in q:                       # the health-check request
+            return _Resp(json.dumps({"articles": []}))
         lo, hi = q["startdatetime"][0][:8], q["enddatetime"][0][:8]
         log.append((lo, hi))
         arts = [{"title": f"Angel One story {hi}-{k}", "url": f"https://x.com/{hi}/{k}", "seendate": hi + "T000000Z", "domain": "x.com"}
@@ -556,6 +558,8 @@ def _noisy_opener(n_title, n_noise):
 
     def opener(url, timeout=30):
         q = up.parse_qs(up.urlparse(url).query)
+        if "enddatetime" not in q:                         # the health-check request
+            return _Resp(json.dumps({"articles": []}))
         log.append(q)
         hi = q["enddatetime"][0][:8]
         arts = [{"title": f"Bajaj Finance news item {hi} {k}", "url": f"https://x.com/t/{hi}/{k}", "seendate": hi + "T000000Z", "domain": "x.com"}
@@ -631,3 +635,49 @@ def test_fulltext_never_blocks_past_its_time_budget(monkeypatch):
     assert time.time() - t0 < 2.0                                              # did not wait for the slow ones
     assert sum(i.parse.startswith("full-text") for i in items) == 3
     assert sum("timed out" in i.parse for i in items) == 3                     # those fall back to the headline
+
+
+# ---- GDELT throttling: fail fast instead of hammering for half an hour ------------------------------------------
+def test_health_check_stops_the_run_in_seconds_when_gdelt_is_refusing(tmp_path):
+    import pytest
+    from sentinelq.ingest.gdelt import GdeltNews
+    calls = []
+    naps = []
+
+    def always_429(url, timeout=30):
+        calls.append(url)
+        raise _http429()
+    g = GdeltNews(sleep=naps.append, opener=always_429)
+    r = load_rubric()
+    p = Pipeline(r, g, None, None, KeywordClassifier(), tmp_path / "o", tmp_path / "c.jsonl", AS_OF, max_articles=50)
+    with pytest.raises(RuntimeError, match="Get-Process python"):
+        p.run(load_portfolio(ROOT / "portfolio" / "stocks_given.tsv"))
+    assert len(calls) == 4                                   # 1 try + 3 retries of the probe only - no per-stock requests
+    assert sum(n for n in naps if n >= 15) == 60             # about a minute of waiting, not half an hour
+
+
+def test_three_stocks_failing_in_a_row_aborts_early(tmp_path):
+    import pytest
+    r = load_rubric()
+    hold = load_portfolio(ROOT / "portfolio" / "stocks_given.tsv")
+
+    class Refusing:
+        n = 0
+        def fetch(self, h, s, e):
+            Refusing.n += 1
+            raise RuntimeError("HTTP 429")
+    p = Pipeline(r, Refusing(), None, None, KeywordClassifier(), tmp_path / "o", tmp_path / "c.jsonl", AS_OF, ingest_retry_wait=0)
+    with pytest.raises(RuntimeError, match="3 stocks in a row"):
+        p.ingest(hold)
+    assert Refusing.n == 3                                   # stopped after 3 of 29, not all 29
+
+
+def test_non_throttle_probe_failure_is_reported_as_a_connection_problem(tmp_path):
+    import pytest
+    from sentinelq.ingest.gdelt import GdeltNews
+    def offline(url, timeout=30):
+        raise ConnectionError("network unreachable")
+    g = GdeltNews(sleep=lambda s: None, opener=offline, retries=1)
+    p = Pipeline(load_rubric(), g, None, None, KeywordClassifier(), tmp_path / "o", tmp_path / "c.jsonl", AS_OF)
+    with pytest.raises(RuntimeError, match="health check failed"):
+        p.ingest(load_portfolio(ROOT / "examples" / "portfolio.csv"))
