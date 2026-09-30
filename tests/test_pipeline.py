@@ -681,3 +681,141 @@ def test_non_throttle_probe_failure_is_reported_as_a_connection_problem(tmp_path
     p = Pipeline(load_rubric(), g, None, None, KeywordClassifier(), tmp_path / "o", tmp_path / "c.jsonl", AS_OF)
     with pytest.raises(RuntimeError, match="health check failed"):
         p.ingest(load_portfolio(ROOT / "examples" / "portfolio.csv"))
+
+
+# ---- Google News RSS (mechanism extracted from Harshil's script) ------------------------------------------------
+def _rss(entries):
+    """entries: (title, link, 'Mon, 15 Jun 2026 09:30:00 GMT', publisher, publisher_url)"""
+    from xml.sax.saxutils import escape
+    items = "".join(f"<item><title>{escape(t)}</title><link>{escape(l)}</link><pubDate>{d}</pubDate>"
+                    f'<source url="{u}">{escape(p)}</source></item>' for t, l, d, p, u in entries)
+    return ('<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><title>x</title>' + items + "</channel></rss>").encode()
+
+
+class _RssResp(_Resp):
+    def __init__(self, body): self.body = body
+    def read(self): return self.body
+
+
+def _gn_opener(per_window, title="Angel One update", log=None):
+    """Fake Google News: each after:/before: window returns `per_window` items dated inside it."""
+    import re, urllib.parse as up
+    from datetime import timedelta as td
+    log = log if log is not None else []
+
+    def opener(req, timeout=30):
+        q = up.parse_qs(up.urlparse(req.full_url).query)["q"][0]
+        m = re.search(r"after:(\d{4}-\d\d-\d\d) before:(\d{4}-\d\d-\d\d)", q)
+        if not m:                                                     # health check
+            return _RssResp(_rss([]))
+        lo, hi = date.fromisoformat(m.group(1)), date.fromisoformat(m.group(2)) - td(days=1)
+        log.append((lo, hi, q))
+        span = max((hi - lo).days, 1)
+        rows = []
+        for k in range(per_window):
+            d = hi - td(days=(k * span) // max(per_window, 1))
+            rows.append((f"{title} {d} {k} - Economic Times", f"https://news.google.com/rss/articles/{d}-{k}",
+                         d.strftime("%a, %d %b %Y 09:30:00 GMT"), "Economic Times", "https://economictimes.indiatimes.com"))
+        return _RssResp(_rss(rows))
+    return opener, log
+
+
+def test_feed_parsing_matches_the_original_script():
+    from sentinelq.ingest.gnews import parse_feed, strip_source_suffix
+    xml = _rss([("Angel One posts record client base - Economic Times", "https://news.google.com/rss/articles/abc",
+                 "Mon, 15 Jun 2026 09:30:00 GMT", "Economic Times", "https://www.economictimes.indiatimes.com")])
+    (row,) = parse_feed(xml)
+    assert row["title"] == "Angel One posts record client base"          # ' - Publisher' stripped
+    assert row["source"] == "economictimes.indiatimes.com" and str(row["date"]) == "2026-06-15"
+    assert strip_source_suffix("A - B - Mint", "Mint") == "A - B"
+    assert strip_source_suffix("Plain headline", "Mint") == "Plain headline"
+    assert strip_source_suffix("Angel One wins order – Moneycontrol", "") == "Angel One wins order"
+
+
+def test_google_news_rolls_back_only_until_enough_and_uses_windows():
+    from sentinelq.ingest.gnews import GoogleNewsRSS
+    from sentinelq.ingest.select import count_usable, name_tokens
+    from sentinelq.models import Holding
+    h = Holding("ANGELONE", "Angel One", "BFSI", aliases="Angel One|Angel One Ltd")
+    opener, log = _gn_opener(per_window=30)
+    g = GoogleNewsRSS(sleep=lambda s: None, opener=opener)
+    toks = name_tokens(h)
+    g.stop_when = lambda its: count_usable(its, toks) >= 50
+    items = g.fetch(h, date(2025, 7, 3), date(2026, 7, 3))
+    assert len(log) == 2 and len(items) == 60                              # 30 + 30 >= 50, stopped before the 3rd window
+    assert '"Angel One" OR "Angel One Ltd"' in log[0][2] and "after:2026-06-04 before:2026-07-04" in log[0][2]
+    assert log[1][1] < log[0][0]                                           # second window is strictly older
+
+
+def test_google_news_covers_the_year_when_articles_are_scarce_and_drops_out_of_window_items():
+    from sentinelq.ingest.gnews import GoogleNewsRSS
+    from sentinelq.models import Holding
+    h = Holding("X", "Angel One", "S")
+    opener, log = _gn_opener(per_window=3)
+    g = GoogleNewsRSS(sleep=lambda s: None, opener=opener)
+    g.stop_when = lambda its: len(its) >= 50
+    items = g.fetch(h, date(2025, 7, 3), date(2026, 7, 3))
+    assert len(log) == 4 and len(items) == 12                              # 30/90/180/365-day windows all used
+    assert min(i.published for i in items) >= "2025-07-03"
+
+    def ignores_operator(req, timeout=30):                                 # server that ignores after:/before:
+        q = __import__("urllib.parse", fromlist=["x"]).parse_qs(__import__("urllib.parse", fromlist=["x"]).urlparse(req.full_url).query)["q"][0]
+        if "after:" not in q:
+            return _RssResp(_rss([]))
+        return _RssResp(_rss([("Angel One old story - ET", "https://news.google.com/rss/articles/old", "Mon, 01 Jan 2024 00:00:00 GMT", "ET", "")]))
+    msgs = []
+    g2 = GoogleNewsRSS(sleep=lambda s: None, opener=ignores_operator, marks=(30,))
+    g2.on_event = msgs.append
+    assert g2.fetch(h, date(2026, 6, 1), date(2026, 7, 3)) == []          # out-of-window items are not used
+    assert any("date operator ignored" in m for m in msgs)                 # ...and it says so
+
+
+def test_google_news_retries_flat_and_never_reads_a_block_page_as_no_news():
+    import pytest
+    from sentinelq.ingest.gdelt import GdeltRateLimited, GdeltUnreachable
+    from sentinelq.ingest.gnews import GoogleNewsRSS
+    from sentinelq.models import Holding
+    h = Holding("X", "Angel One", "S")
+    seq = [_http429(), _RssResp(b"<html>consent page</html>"), _RssResp(_rss([]))]
+    naps = []
+
+    def flaky(req, timeout=30):
+        r = seq.pop(0)
+        if isinstance(r, Exception):
+            raise r
+        return r
+    g = GoogleNewsRSS(sleep=naps.append, opener=flaky, marks=(30,))
+    assert g.fetch(h, date(2026, 6, 1), date(2026, 7, 3)) == []
+    assert [n for n in naps if n >= 15] == [20.0, 20.0]                    # flat 20 s waits
+    always = GoogleNewsRSS(sleep=lambda s: None, retries=1, opener=lambda req, timeout=30: _RssResp(b"<html>blocked</html>"))
+    with pytest.raises(GdeltRateLimited):
+        always.fetch(h, date(2026, 6, 1), date(2026, 7, 3))
+    def offline(req, timeout=30):
+        raise ConnectionError("down")
+    with pytest.raises(GdeltUnreachable):
+        GoogleNewsRSS(sleep=lambda s: None, retries=1, opener=offline).fetch(h, date(2026, 6, 1), date(2026, 7, 3))
+
+
+def test_pipeline_with_google_news_keeps_latest_50_titles_that_name_the_company(tmp_path):
+    from sentinelq.ingest.gnews import GoogleNewsRSS
+    from sentinelq.models import Holding
+    r = load_rubric()
+    opener, log = _gn_opener(per_window=40, title="Bajaj Finance")
+    g = GoogleNewsRSS(sleep=lambda s: None, opener=opener)
+    p = Pipeline(r, g, None, None, KeywordClassifier(), tmp_path / "o", tmp_path / "c.jsonl", date(2026, 7, 3), max_articles=50)
+    items, found, errs = p._fetch_stock(Holding("BAJFINANCE", "Bajaj Finance", "BFSI"))
+    news = [i for i in items if i.kind == "news"]
+    assert not errs and len(news) == 50 and len(log) == 2                  # 40 + 40 collected, trimmed to the latest 50
+    assert news == sorted(news, key=lambda i: i.published, reverse=True) and news[0].published.startswith("2026-07")
+    assert all(i.source == "economictimes.indiatimes.com" for i in news)
+
+
+def test_fulltext_skips_google_redirect_links(monkeypatch):
+    from sentinelq.ingest import fulltext
+    from sentinelq.models import RawItem
+    calls = []
+    monkeypatch.setattr(fulltext, "fetch_text", lambda url, *a, **k: calls.append(url) or "body")
+    items = [RawItem("X", "news", "t", "", "https://news.google.com/rss/articles/abc", "2026-06-01"),
+             RawItem("X", "news", "t2", "", "https://example.com/story", "2026-06-01")]
+    fulltext.enrich(items)
+    assert calls == ["https://example.com/story"] and items[0].parse == "headline-only (google link)"

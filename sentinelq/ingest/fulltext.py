@@ -34,7 +34,10 @@ def enrich(items, cache_path=None, workers: int = 16, progress=None, budget: flo
     Whatever has not arrived by then is read from its headline alone; the run never waits on slow or paywalled sites.
     `cache_path` is accepted for compatibility; nothing is written."""
     from concurrent.futures import wait
-    todo = [i for i in items if i.kind == "news" and not i.snippet and i.url]
+    for i in items:                       # Google News links are redirect pages with no article body: headline only
+        if i.kind == "news" and "news.google.com" in (i.url or ""):
+            i.parse = "headline-only (google link)"
+    todo = [i for i in items if i.kind == "news" and not i.snippet and i.url and "news.google.com" not in i.url]
     ex = ThreadPoolExecutor(workers)
     futs = {ex.submit(fetch_text, i.url): i for i in todo}
     done, _pending = wait(list(futs), timeout=budget)

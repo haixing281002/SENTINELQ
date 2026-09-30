@@ -20,8 +20,8 @@ def main(argv=None):
     p.add_argument("--classifier", choices=["claude-code", "file", "anthropic", "keyword"], default="claude-code",
                    help="claude-code: local `claude -p`, no API key (default); file: hand-off files; anthropic: API key; keyword: offline stub")
     p.add_argument("--model", default=None, help="Anthropic model id (or env SENTINELQ_MODEL)")
-    p.add_argument("--news", choices=["gdelt", "file"], default="gdelt",
-                   help="gdelt = free GDELT DOC API, rolling back newest-first until enough articles; file = your own JSON")
+    p.add_argument("--news", choices=["gnews", "gdelt", "file"], default="gnews",
+                   help="gnews = free Google News RSS (default, fast); gdelt = free GDELT DOC API; file = your own JSON. Both roll back newest-first until enough articles")
     p.add_argument("--gdelt-slice-days", type=int, default=90, help="DOC API window size in days (max useful is 90)")
     p.add_argument("--news-file")
     p.add_argument("--actions", choices=["yahoo", "file", "none"], default="yahoo")
@@ -53,6 +53,9 @@ def main(argv=None):
 
     if a.news == "file":
         news = FileNews(a.news_file)
+    elif a.news == "gnews":
+        from .ingest.gnews import GoogleNewsRSS
+        news = GoogleNewsRSS()
     else:
         from .ingest.gdelt import GdeltNews
         news = GdeltNews(slice_days=a.gdelt_slice_days)

@@ -74,9 +74,9 @@ def pick_holdings(universe: str | Path, queries: list[str]) -> list[Holding]:
     return [Holding(h.symbol, h.name, h.sector, h.cap, "", h.aliases) for h in out]
 
 THROTTLE_HELP = (
-    "GDELT is refusing requests from this machine (HTTP 429 / rate limit). Nothing was scored. What to do:\n"
+    "The news source (GDELT / Google News) is refusing requests from this machine (HTTP 429 / rate limit). Nothing was scored. What to do:\n"
     "  1. Make sure no earlier run is still going - stopping a task can leave the Python process alive and every old run keeps\n"
-    "     hitting GDELT from your IP. Windows PowerShell:  Get-Process python*, sentinelq* | Stop-Process -Force\n"
+    "     hitting the news source from your IP. Windows PowerShell:  Get-Process python*, sentinelq* | Stop-Process -Force\n"
     "     (or Task Manager -> Details -> end python.exe / sentinelq.exe).\n"
     "  2. Wait 10-15 minutes so GDELT's limit clears, then re-run the same command (labels already obtained are reused).\n"
     "  3. Only ever run one instance at a time; a different network (e.g. phone hotspot) also works if your IP stays limited."
