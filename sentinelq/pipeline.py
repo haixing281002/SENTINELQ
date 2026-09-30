@@ -69,6 +69,7 @@ class Pipeline:
                  as_of: date | None = None, mode: str = "absolute",
                  narrator=None, title: str = "Portfolio", coverage: str = "",
                  max_articles: int | None = None, fetch_text: bool = False,
+                 max_label_failure: float = 0.10,
                  text_cache: str | Path = ".cache/fulltext.jsonl"):
         self.r, self.news, self.actions, self.prices, self.clf = rubric, news, actions, prices, classifier
         self.out = Path(out_dir)
@@ -76,6 +77,7 @@ class Pipeline:
         self.as_of = as_of or date.today()
         self.mode = mode
         self.max_articles = max_articles
+        self.max_label_failure = max_label_failure
         self.fetch_text, self.text_cache = fetch_text, text_cache
         self.narrator = narrator or TemplateNarrator()
         self.meta = {"title": title, "coverage": coverage}
@@ -131,6 +133,8 @@ class Pipeline:
     def classify_and_validate(self, holdings, raw):
         names = {h.symbol: h.name for h in holdings}
         if hasattr(self.clf, "prefetch"):   # batch labelling (claude-code mode)
+            self.clf.on_label = lambda it, d, raw: self.cache.put(   # persist immediately: an aborted run keeps its work
+                item_key(it.url, it.title, it.snippet, self.clf.model_id, PROMPT_VERSION), d, raw)
             self.clf.prefetch([(i, names[sym]) for sym, its in raw.items() for i in its
                                if i.prelabel is None and i.url.strip()
                                and not self.cache.get(item_key(i.url, i.title, i.snippet, self.clf.model_id, PROMPT_VERSION))])
@@ -143,9 +147,13 @@ class Pipeline:
                 label_d, resp, cached = self._classify_one(it, names[sym])
                 attempts = 1
                 reason = validate_label(it, label_d, self.r, self.as_of, lookback)
+                errs = getattr(self.clf, "errors", {})
+                if reason == "no_structured_output":
+                    from .classify import item_id
+                    reason = "label_failed: " + errs.get(item_id(it), "model returned no label")
                 raw_log.append({"symbol": sym, "url": it.url, "attempt": 1, "cached": cached,
                                 "reason": reason, "raw": resp})
-                if reason and not reason.startswith(("missing_", "invalid_source", "date_", "not_about_company")):
+                if reason and not reason.startswith(("missing_", "invalid_source", "date_", "not_about_company", "label_failed")):
                     # model-side failure: retry exactly once, bypassing the cache
                     label_d, resp, cached = self._classify_one(it, names[sym], bypass_cache=True)
                     attempts = 2
@@ -162,6 +170,20 @@ class Pipeline:
     def run(self, holdings: list[Holding], ingested=None) -> dict:
         raw, ingest_errors = ingested or self.ingest(holdings)
         kept, dropped, raw_log = self.classify_and_validate(holdings, raw)
+        failed = [d for d in dropped if d.reason.startswith("label_failed")]
+        labelable = sum(1 for v in raw.values() for i in v if i.url.strip()) or 1
+        if failed:
+            self.out.mkdir(parents=True, exist_ok=True)
+            (self.out / "label_failures.jsonl").write_text("\n".join(json.dumps(asdict(d)) for d in failed))
+            from collections import Counter
+            top = Counter(d.reason for d in failed).most_common(3)
+            msg = (f"{len(failed)}/{labelable} items could not be labelled by the model "
+                   f"({len(failed) / labelable:.0%}). Top reasons: {top}. Details: {self.out}/label_failures.jsonl")
+            if len(failed) / labelable > self.max_label_failure:
+                raise RuntimeError("Refusing to write a report built on failed labelling. " + msg +
+                                   "\nLabels already obtained are cached - re-run the same command to retry only the failures "
+                                   "(or pass --allow-partial-labels to accept the gap).")
+            print("WARNING: " + msg)
         dcount: dict[str, int] = {}
         for d in dropped:
             dcount[d.symbol] = dcount.get(d.symbol, 0) + 1
@@ -180,6 +202,7 @@ class Pipeline:
         coverage = [{"symbol": h.symbol, "retrieved": len(raw[h.symbol]),
                      "kept": len(kept[h.symbol]), "dropped": dcount.get(h.symbol, 0),
                      "news_kept": sum(1 for i in kept[h.symbol] if i.item.kind == "news"),
+                     "label_failed": sum(1 for d in dropped if d.symbol == h.symbol and d.reason.startswith("label_failed")),
                      "actions_kept": sum(1 for i in kept[h.symbol] if i.item.kind == "action"),
                      "low_confidence": next(s.low_confidence for s in scores if s.symbol == h.symbol)}
                     for h in holdings]
@@ -187,7 +210,7 @@ class Pipeline:
                "sentinelq_version": __version__, "rubric_version": self.r.version,
                "rubric_sha256": self.r.sha256, "classifier_model": self.clf.model_id,
                "prompt_version": PROMPT_VERSION, "mode": self.mode,
-               "totals": {"retrieved": sum(len(v) for v in raw.values()),
+               "totals": {"label_failed": len(failed), "retrieved": sum(len(v) for v in raw.values()),
                           "kept": sum(len(v) for v in kept.values()), "dropped": len(dropped)}}
         result = dict(run=run, scores=scores, kept=kept, dropped=dropped, coverage=coverage,
                       price_context=ctx, relative=rel, ingest_errors=ingest_errors, raw_log=raw_log)

@@ -209,3 +209,118 @@ def test_ingest_is_cached(tmp_path):
     first = Once.n
     p.ingest(hold)
     assert Once.n == first == 3            # second ingest reads the cache, no provider calls
+
+
+# ---- labelling resilience (the "285 of 338 unlabelled" failure) -----------------------------------------------
+def _items(n):
+    from sentinelq.models import RawItem
+    return [(RawItem("X", "news", f"Co X headline {k}", "", f"https://a.b/{k}", "2026-06-01"), "Co X") for k in range(n)]
+
+
+def _fake_reply(prompt):
+    import re
+    ids = re.findall(r'"id": "([0-9a-f]{16})"', prompt)
+    return json.dumps([{"id": i, "event_type": "other", "sentiment": 0, "rationale": "r", "governance_flag": False,
+                        "about_company": True} for i in ids])
+
+
+def test_parse_labels_tolerates_messy_replies():
+    from sentinelq.claude_code import parse_labels
+    good = '[{"id":"a","sentiment":1},{"id":"b","sentiment":2}]'
+    assert len(parse_labels(good)) == 2
+    assert len(parse_labels("Here you go [as requested]:\n```json\n" + good + "\n```\nDone.")) == 2   # stray bracket + fence
+    assert len(parse_labels('{"labels": ' + good + "}")) == 2
+    assert len(parse_labels('[{"id":"a","x":1},{"id":"b","x":')) == 1                                # truncated: salvage
+    assert parse_labels("") == [] and parse_labels("Sorry, I can't.") == []
+
+
+def test_batch_failure_is_split_down_and_recovered(tmp_path, monkeypatch):
+    """Big batches fail (timeout/garbage); the classifier must halve them until they succeed - nothing lost."""
+    from sentinelq import claude_code as cc
+    from sentinelq.classify import item_id
+
+    def fake(prompt, model=None, timeout=600):
+        n = prompt.count('"id": "')
+        if n > 2:
+            raise RuntimeError("claude CLI failed (1): request timed out")
+        return _fake_reply(prompt)
+    monkeypatch.setattr(cc, "run_claude", fake)
+    clf = cc.ClaudeCodeClassifier(load_rubric(), batch_size=8, workers=2, log_path=tmp_path / "log.jsonl")
+    saved = []
+    clf.on_label = lambda it, d, raw: saved.append(item_id(it))          # persisted as they arrive
+    pairs = _items(11)
+    clf.prefetch(pairs)
+    assert len(clf._res) == 11 and not clf.errors and len(saved) == 11
+    assert (tmp_path / "log.jsonl").read_text().count("timed out") >= 1     # the reason is recorded, not swallowed
+
+
+def test_single_bad_item_is_isolated_and_reported(tmp_path, monkeypatch):
+    from sentinelq import claude_code as cc
+    from sentinelq.classify import item_id
+    pairs = _items(6)
+    bad = item_id(pairs[3][0])
+
+    def fake(prompt, model=None, timeout=600):
+        if bad in prompt:
+            return "I cannot label this."
+        return _fake_reply(prompt)
+    monkeypatch.setattr(cc, "run_claude", fake)
+    clf = cc.ClaudeCodeClassifier(load_rubric(), batch_size=6, workers=1, log_path=tmp_path / "l.jsonl")
+    clf.prefetch(pairs)
+    assert len(clf._res) == 5 and list(clf.errors) == [bad]
+    assert "no parseable labels" in clf.errors[bad]
+
+
+def test_rate_limit_aborts_early_and_keeps_saved_labels(tmp_path, monkeypatch):
+    import pytest
+    from sentinelq import claude_code as cc
+    monkeypatch.setattr(cc, "BACKOFF", (0, 0))
+    calls = {"n": 0}
+
+    def fake(prompt, model=None, timeout=600):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return _fake_reply(prompt)
+        raise RuntimeError("claude CLI error: usage limit reached")
+    monkeypatch.setattr(cc, "run_claude", fake)
+    clf = cc.ClaudeCodeClassifier(load_rubric(), batch_size=4, workers=1, log_path=tmp_path / "l.jsonl")
+    with pytest.raises(cc.LabellingAborted):
+        clf.prefetch(_items(20))
+    assert len(clf._res) == 4                   # the first batch is kept
+    assert calls["n"] < 12                      # gave up quickly instead of grinding through all batches
+
+
+def test_total_label_failure_refuses_to_write_report(tmp_path, monkeypatch):
+    import pytest
+    from sentinelq import claude_code as cc
+    monkeypatch.setattr(cc, "run_claude", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    r = load_rubric()
+    clf = cc.ClaudeCodeClassifier(r, log_path=tmp_path / "l.jsonl")
+    p = Pipeline(r, FileNews(FX / "news.json"), None, None, clf, tmp_path / "o", tmp_path / "c.jsonl", AS_OF,
+                 text_cache=tmp_path / "ft.jsonl")
+    with pytest.raises(RuntimeError, match="failed for every item|Refusing"):
+        p.run(load_portfolio(ROOT / "examples" / "portfolio.csv"))
+    assert not (tmp_path / "o" / "sentinelq_scorecard.pdf").exists()
+
+
+def test_partial_failure_is_reported_as_label_failed_not_irrelevant(tmp_path, monkeypatch):
+    from sentinelq import claude_code as cc
+    from sentinelq.classify import item_id
+    r = load_rubric()
+    hold = load_portfolio(ROOT / "examples" / "portfolio.csv")
+    news = FileNews(FX / "news.json")
+    victim = news.fetch(hold[0], AS_OF, AS_OF)[0]
+
+    def fake(prompt, model=None, timeout=600):
+        if item_id(victim) in prompt:
+            raise RuntimeError("claude CLI failed (1): weird")
+        return _fake_reply(prompt)
+    monkeypatch.setattr(cc, "run_claude", fake)
+    clf = cc.ClaudeCodeClassifier(r, batch_size=4, workers=1, log_path=tmp_path / "l.jsonl")
+    p = Pipeline(r, news, None, None, clf, tmp_path / "o", tmp_path / "c.jsonl", AS_OF, text_cache=tmp_path / "ft.jsonl",
+                 max_label_failure=0.5)
+    res = p.run(hold)
+    reasons = [d.reason for d in res["dropped"] if d.url == victim.url]
+    assert reasons and reasons[0].startswith("label_failed") and "weird" in reasons[0]
+    assert res["run"]["totals"]["label_failed"] == 1
+    assert (tmp_path / "o" / "label_failures.jsonl").exists()

@@ -10,6 +10,9 @@ from __future__ import annotations
 import json
 import subprocess
 import tempfile
+import threading
+import time
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
 from .classify import batch_prompt, item_id
@@ -93,39 +96,142 @@ def extract_json(text: str, opener: str):
     return json.loads(text[a:b + 1])
 
 
+def parse_labels(text: str) -> list[dict]:
+    """Pull a list of label dicts (each with an 'id') out of a model reply, tolerating code fences, prose around
+    the JSON, stray brackets before the array, a wrapping {"labels": [...]}, and truncated/invalid arrays (in which
+    case whole objects are salvaged one by one)."""
+    import re
+    t = re.sub(r"```(?:json)?", "", text or "")
+    dec = json.JSONDecoder()
+    for m in re.finditer(r"[\[{]", t):
+        try:
+            obj, _ = dec.raw_decode(t[m.start():])
+        except ValueError:
+            continue
+        if isinstance(obj, dict):
+            obj = next((v for v in obj.values() if isinstance(v, list)), [obj] if "id" in obj else [])
+        if isinstance(obj, list) and obj and all(isinstance(o, dict) for o in obj) and any("id" in o for o in obj):
+            return [o for o in obj if "id" in o]
+    out = []
+    for m in re.finditer(r"\{[^{}]*\"id\"[^{}]*\}", t):
+        try:
+            out.append(json.loads(m.group(0)))
+        except ValueError:
+            pass
+    return out
+
+
+RATE_HINTS = ("rate", "limit", "overload", "429", "529", "quota", "too many", "capacity", "usage")
+BACKOFF = (30, 60, 120)          # seconds between retries of a rate-limited call
+
+
+class LabellingAborted(RuntimeError):
+    pass
+
+
 class ClaudeCodeClassifier:
-    def __init__(self, rubric: Rubric, model: str | None = None, batch_size: int = 12, workers: int = 3):
-        self.r, self.model, self.bs, self.workers = rubric, model, batch_size, workers
+    def __init__(self, rubric: Rubric, model: str | None = None, batch_size: int = 8, workers: int = 2,
+                 log_path: str | Path = "work/claude_batches.jsonl"):
+        self.r, self.model, self.bs, self.workers = rubric, model, max(1, batch_size), max(1, workers)
         self.model_id = f"claude-code:{model or 'default'}"
         self._res: dict[str, tuple[dict, str]] = {}
+        self.errors: dict[str, str] = {}       # item id -> why it could not be labelled
+        self.on_label = None                   # callback(item, label_dict, raw): persists labels as they arrive
+        self.abort = False
+        self.log_path = Path(log_path)
+        self._lock = threading.Lock()
 
-    def _label_batch(self, pairs):
-        try:
-            txt = run_claude(batch_prompt(pairs, self.r), self.model)
-            for d in extract_json(txt, "["):
-                if isinstance(d, dict) and "id" in d:
-                    self._res[d.pop("id")] = (d, json.dumps(d))
-        except Exception as e:   # a failed batch just leaves items unlabelled -> validate retries -> drops w/ reason
-            print(f"  [claude-code] batch failed: {e}")
+    def _log(self, **rec):
+        with self._lock:
+            self.log_path.parent.mkdir(parents=True, exist_ok=True)
+            with self.log_path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+    def _ask(self, pairs) -> tuple[set[str], str]:
+        """One claude call for `pairs`. Returns (ids labelled, error text). Rate limits back off and retry."""
+        ids = [item_id(i) for i, _ in pairs]
+        err = ""
+        for attempt in range(len(BACKOFF) + 1):
+            if self.abort:
+                return set(), "aborted after repeated rate-limit/usage errors"
+            try:
+                txt = run_claude(batch_prompt(pairs, self.r), self.model)
+            except Exception as e:
+                err = f"{type(e).__name__}: {e}"[:500]
+                self._log(ids=ids, attempt=attempt, error=err)
+                if any(h in err.lower() for h in RATE_HINTS) and attempt < len(BACKOFF):
+                    time.sleep(BACKOFF[attempt])
+                    continue
+                if any(h in err.lower() for h in RATE_HINTS):
+                    self.abort = True
+                return set(), err
+            got = parse_labels(txt)
+            self._log(ids=ids, attempt=attempt, reply_head=(txt or "")[:300], parsed=len(got))
+            done = set()
+            by_id = {d["id"]: d for d in got if isinstance(d.get("id"), str)}
+            for it, _c in pairs:
+                d = by_id.get(item_id(it))
+                if d is None:
+                    continue
+                d = {k: v for k, v in d.items() if k != "id"}
+                with self._lock:
+                    self._res[item_id(it)] = (d, json.dumps(d))
+                if self.on_label:
+                    self.on_label(it, d, json.dumps(d))
+                done.add(item_id(it))
+            if done:
+                return done, ""
+            err = "reply contained no parseable labels: " + (txt or "(empty)")[:200].replace("\n", " ")
+            return set(), err
+        return set(), err
+
+    def _label_batch(self, pairs, depth: int = 0):
+        """Label a batch; on failure retry the missing items in halves, down to single items, so one bad item or
+        one bad reply can never take a whole batch with it."""
+        if not pairs or self.abort:
+            return
+        done, err = self._ask(pairs)
+        missing = [(i, c) for i, c in pairs if item_id(i) not in done]
+        if not missing:
+            return
+        if len(missing) == 1:
+            self.errors[item_id(missing[0][0])] = err or "model returned no label"
+            return
+        if len(missing) == len(pairs):            # nothing came back: split
+            mid = len(missing) // 2
+            self._label_batch(missing[:mid], depth + 1)
+            self._label_batch(missing[mid:], depth + 1)
+        else:                                     # partial reply: re-ask only for the missing items
+            self._label_batch(missing, depth + 1)
 
     def prefetch(self, pairs: list[tuple[RawItem, str]]):
         todo = [(i, c) for i, c in pairs if item_id(i) not in self._res]
         batches = [todo[k:k + self.bs] for k in range(0, len(todo), self.bs)]
-        print(f"  [claude-code] labelling {len(todo)} items in {len(batches)} batches")
-        self.failed_batches = 0
+        print(f"  [claude-code] labelling {len(todo)} items in {len(batches)} batches "
+              f"(batch={self.bs}, workers={self.workers}); log: {self.log_path}")
+        done = 0
         with ThreadPoolExecutor(self.workers) as ex:
-            list(ex.map(self._label_batch, batches))
-        if batches and not any(item_id(i) in self._res for i, _ in todo):
-            raise RuntimeError("Model labelling failed for every batch - refusing to write an empty report. "
-                               "Check the [claude-code] errors above (see docs/NO_API_KEY.md).")
-        missing = sum(1 for i, _ in todo if item_id(i) not in self._res)
-        if missing:
-            print(f"  [claude-code] WARNING: {missing}/{len(todo)} items got no label (they will be retried once, then dropped and disclosed)")
+            for _ in ex.map(self._label_batch, batches):
+                done += 1
+                if done % 5 == 0 or done == len(batches):
+                    print(f"  [claude-code] {done}/{len(batches)} batches, {len(self._res)} labels, {len(self.errors)} failed")
+        if self.abort:
+            raise LabellingAborted("Claude Code kept returning rate-limit/usage errors, so labelling stopped. "
+                                   f"{len(self._res)} labels are saved in the cache; re-run the same command later to resume "
+                                   f"(only unlabelled items are retried). Details: {self.log_path}")
+        if batches and not self._res:
+            first = next(iter(self.errors.values()), "unknown")
+            raise RuntimeError("Model labelling failed for every item - refusing to write an empty report.\n"
+                               f"First error: {first}\nFull per-batch log: {self.log_path}")
+        if self.errors:
+            print(f"  [claude-code] WARNING: {len(self.errors)}/{len(todo)} items could not be labelled "
+                  f"(reasons in {self.log_path})")
 
     def classify(self, item, company):
-        if item_id(item) not in self._res:      # retry path / uncached single item
+        iid = item_id(item)
+        if iid not in self._res and iid not in self.errors:     # not prefetched (single-item use)
             self._label_batch([(item, company)])
-        d = self._res.get(item_id(item))
+        d = self._res.get(iid)
         return d if d else (None, "")
 
 

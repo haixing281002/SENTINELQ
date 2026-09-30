@@ -31,6 +31,9 @@ def main(argv=None):
     p.add_argument("--coverage", default="", help="coverage blurb on page 1")
     p.add_argument("--narrator", choices=["claude-code", "file", "anthropic", "template"], default=None,
                    help="prose writer for the PDF (default: same as --classifier)")
+    p.add_argument("--batch-size", type=int, default=8, help="items per claude call (claude-code mode)")
+    p.add_argument("--workers", type=int, default=2, help="parallel claude calls (lower if you hit rate limits)")
+    p.add_argument("--allow-partial-labels", action="store_true", help="write the report even if many items failed to label")
     p.add_argument("--fetch-text", action="store_true", help="fetch article body text (better labels than headlines)")
     p.add_argument("--work", default="work", help="dir for hand-off files (file mode)")
     a = p.parse_args(argv)
@@ -68,7 +71,7 @@ def main(argv=None):
         clf = KeywordClassifier()
     elif a.classifier == "claude-code":
         from .claude_code import ClaudeCodeClassifier
-        clf = ClaudeCodeClassifier(r, a.model)
+        clf = ClaudeCodeClassifier(r, a.model, a.batch_size, a.workers, work / "claude_batches.jsonl")
     elif a.classifier == "file":
         from .handoff import FileClassifier
         clf = FileClassifier(work / "labels.jsonl")
@@ -99,7 +102,8 @@ def main(argv=None):
     else:
         p.error("give --portfolio or --pick")
     pipe = Pipeline(r, news, actions, prices, clf, out, a.cache, as_of, a.mode,
-                    narrator, a.title, a.coverage, a.max_articles, a.fetch_text)
+                    narrator, a.title, a.coverage, a.max_articles, a.fetch_text,
+                    1.01 if a.allow_partial_labels else 0.10)
     from .resolve import enrich
     holdings = enrich(holdings, a.universe, mode="none" if a.classifier in ("keyword", "file") else "claude-code", model=a.model)
     ingested = None

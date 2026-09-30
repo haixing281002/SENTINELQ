@@ -75,12 +75,12 @@ def write_reports(out: Path, res: dict, rubric) -> None:
            ["Symbol", "Date", "Headline", "Event Type", "Materiality", "Contribution", "Source URL"],
            ca, link_col=6, widths=W)
 
-    cov = [[c["symbol"], c["retrieved"], c["news_kept"], c["actions_kept"], c["kept"], c["dropped"],
+    cov = [[c["symbol"], c["retrieved"], c["news_kept"], c["actions_kept"], c["kept"], c["dropped"], c["label_failed"],
             "YES" if c["low_confidence"] else ""] for c in res["coverage"]]
     t = run["totals"]
-    cov.append(["PORTFOLIO", t["retrieved"], "", "", t["kept"], t["dropped"], ""])
+    cov.append(["PORTFOLIO", t["retrieved"], "", "", t["kept"], t["dropped"], t["label_failed"], ""])
     _sheet(wb, "Coverage", ["Symbol", "Retrieved", "News Kept", "Actions Kept", "Kept", "Dropped",
-                            "Low Confidence"], cov)
+                            "Of which: model failed to label", "Low Confidence"], cov)
     ws = wb["Coverage"]
     ws.append([])
     ws.append(["Dropped items (stage, reason)"])

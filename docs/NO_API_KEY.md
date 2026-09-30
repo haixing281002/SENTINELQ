@@ -41,3 +41,12 @@ one_line_read, key_corporate_action, coverage_note}, "_observations": [{title, b
 * Prompts are sent as UTF-8, so company names / symbols never break on the Windows code page.
 * Fetched articles are cached in `.cache/ingest/` and `.cache/fulltext.jsonl`, so a failed or repeated run does not
   re-download them. Labels are cached in `.cache/labels.jsonl` only when the model actually returned one.
+
+## If labelling fails (`label_failed`)
+* Every claude call is logged to `work/claude_batches.jsonl` (ids, error text, first 300 chars of each reply).
+* Failed batches are retried, then split in halves down to single items, so one bad item or reply cannot sink a batch.
+  Rate-limit/usage errors back off (30s, 60s, 120s); if they persist the run stops early and keeps what it has.
+* Labels are written to `.cache/labels.jsonl` **as they arrive**; re-running the same command only retries the rest.
+* Items the model could not label are reported as `label_failed: <reason>` (never as "irrelevant"), listed in
+  `label_failures.jsonl`, and counted on the Coverage sheet. If more than 10% fail the run refuses to write a report
+  (override with `--allow-partial-labels`). Tune with `--batch-size 4 --workers 1` if you keep hitting limits.
