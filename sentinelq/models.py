@@ -35,6 +35,7 @@ class Label:
     governance_flag: bool
     materiality: str | None = None   # only used for corporate actions / fines
     historical: bool = False         # event happened before the lookback window (background mention)
+    relevant: bool = True            # item is actually about the company (else dropped)
 
 
 @dataclass

@@ -26,6 +26,11 @@ SYSTEM = (
     "materiality (low/medium/high) is the economic size of a corporate action or fine, else omit. "
     "historical is true only if the text describes an event that took place more than 12 months before the publication date "
     "(background mention); otherwise false. "
+    "about_company is false if the item is NOT actually about the named company (a different entity with a similar "
+    "name, a generic market roundup that only lists it, an unrelated topic); when false, use event_type 'other', sentiment 0. "
+    "Calibration: SEBI/regulator order or settlement -> regulatory_action, -2, governance. CXO/CFO resignation -> management_exit, -1, "
+    "governance. Record quarterly profit / revenue growth -> earnings_beat, +2. Profit collapse -> earnings_miss, -2. Routine broker "
+    "target reiteration -> analyst_action, +1 or 0. Dividend declared -> dividend, +1. "
     "You must answer by calling the label_item tool."
 )
 
@@ -43,11 +48,31 @@ def tool_schema(r: Rubric) -> dict:
                 "governance_flag": {"type": "boolean"},
                 "materiality": {"type": "string", "enum": r["materiality_levels"]},
                 "historical": {"type": "boolean"},
+                "about_company": {"type": "boolean"},
             },
-            "required": ["event_type", "sentiment", "rationale", "governance_flag"],
+            "required": ["event_type", "sentiment", "rationale", "governance_flag", "about_company"],
             "additionalProperties": False,
         },
     }
+
+
+def item_id(item: RawItem) -> str:
+    import hashlib
+    return hashlib.sha256(f"{item.url}\x1f{item.title}".encode()).hexdigest()[:16]
+
+
+def item_payload(item: RawItem, company: str) -> dict:
+    return {"id": item_id(item), "company": company, "published": item.published, "source": item.source,
+            "headline": item.title, "text": item.snippet or "(headline only)"}
+
+
+def batch_prompt(pairs: list[tuple[RawItem, str]], r: Rubric) -> str:
+    """One prompt labelling many independent items; used by the no-API-key paths."""
+    schema = tool_schema(r)["input_schema"]
+    return (SYSTEM.replace("You must answer by calling the label_item tool.", "") +
+            "\n\nLabel EACH item below independently. Reply with ONLY a JSON array (no prose, no code fence), one "
+            "object per item, each with an \"id\" field copied from the item plus the fields of this JSON schema:\n" +
+            json.dumps(schema) + "\n\nITEMS:\n" + "\n".join(json.dumps(item_payload(i, c)) for i, c in pairs))
 
 
 def user_message(item: RawItem, company: str) -> str:
@@ -122,19 +147,24 @@ class KeywordClassifier:
 
     def classify(self, item, company):
         text = f"{item.title} {item.snippet}".lower()
+        if company.split()[0].lower() not in text:
+            lab = {"event_type": "other", "sentiment": 0, "rationale": "Company not named in text.",
+                   "governance_flag": False, "about_company": False}
+            return lab, json.dumps(lab)
         for pat, et, s, g in _RULES:
             if re.search(pat, text):
                 if et == "analyst_action":
                     s = -1 if "downgrade" in text else 1 if "upgrade" in text else 0
                 lab = {"event_type": et, "sentiment": s,
                        "rationale": f"Keyword match on '{pat.split('|')[0]}' in headline.",
-                       "governance_flag": g}
+                       "governance_flag": g, "about_company": True}
                 return lab, json.dumps(lab)
         lab = {"event_type": "other", "sentiment": 0, "rationale": "No taxonomy match in text.",
-               "governance_flag": False}
+               "governance_flag": False, "about_company": True}
         return lab, json.dumps(lab)
 
 
 def to_label(d: dict) -> Label:
     return Label(d["event_type"], d["sentiment"], d["rationale"], bool(d["governance_flag"]),
-                 d.get("materiality"), bool(d.get("historical", False)))
+                 d.get("materiality"), historical=bool(d.get("historical", False)),
+                 relevant=bool(d.get("about_company", True)))

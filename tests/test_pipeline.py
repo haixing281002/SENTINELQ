@@ -105,3 +105,34 @@ def test_max_articles_cap(tmp_path):
     res = p.run(load_portfolio(ROOT / "examples" / "portfolio.csv"))
     assert all(sum(li.item.kind == "news" for li in v) <= 1 for v in res["kept"].values())
     assert res["run"]["totals"]["retrieved"] == 3   # one per company
+
+
+def test_file_handoff_roundtrip(tmp_path):
+    import json
+    from sentinelq.classify import KeywordClassifier, item_id
+    from sentinelq.handoff import FileClassifier
+    r = load_rubric()
+    hold = load_portfolio(ROOT / "examples" / "portfolio.csv")
+    names = {h.symbol: h.name for h in hold}
+    clf = FileClassifier(tmp_path / "labels.jsonl")
+    p = Pipeline(r, FileNews(FX / "news.json"), None, None, clf, tmp_path / "o", tmp_path / "c.jsonl", AS_OF)
+    raw, _ = p.ingest(hold)
+    pend = clf.pending([(i, names[s]) for s, v in raw.items() for i in v])
+    assert len(pend) == 6                      # the no-URL item is never sent for labelling
+    kw = KeywordClassifier()                   # stand-in for a human/Claude labeller
+    with open(tmp_path / "labels.jsonl", "w") as f:
+        for i, c in pend:
+            d, _ = kw.classify(i, c)
+            f.write(json.dumps({"id": item_id(i), **d}) + "\n")
+    clf2 = FileClassifier(tmp_path / "labels.jsonl")
+    assert not clf2.pending([(i, names[s]) for s, v in raw.items() for i in v])
+    res = Pipeline(r, FileNews(FX / "news.json"), None, None, clf2, tmp_path / "o2", tmp_path / "c2.jsonl", AS_OF).run(hold)
+    assert {x.symbol: x.governance_score for x in res["scores"]}["ANGELONE"] == 72
+
+
+def test_irrelevant_items_dropped(tmp_path):
+    from sentinelq.models import RawItem
+    r = load_rubric()
+    it = RawItem("X", "news", "t", "", "https://a.b/c", "2026-06-01")
+    lab = {"event_type": "other", "sentiment": 0, "rationale": "x", "governance_flag": False, "about_company": False}
+    assert validate_label(it, lab, r, AS_OF, 365) == "not_about_company"

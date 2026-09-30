@@ -37,13 +37,15 @@ class Pipeline:
                  out_dir: str | Path, cache_path: str | Path = ".cache/labels.jsonl",
                  as_of: date | None = None, mode: str = "absolute",
                  narrator=None, title: str = "Portfolio", coverage: str = "",
-                 max_articles: int | None = None):
+                 max_articles: int | None = None, fetch_text: bool = False,
+                 text_cache: str | Path = ".cache/fulltext.jsonl"):
         self.r, self.news, self.actions, self.prices, self.clf = rubric, news, actions, prices, classifier
         self.out = Path(out_dir)
         self.cache = LabelCache(cache_path)
         self.as_of = as_of or date.today()
         self.mode = mode
         self.max_articles = max_articles
+        self.fetch_text, self.text_cache = fetch_text, text_cache
         self.narrator = narrator or TemplateNarrator()
         self.meta = {"title": title, "coverage": coverage}
 
@@ -65,6 +67,9 @@ class Pipeline:
                 news = sorted((i for i in items if i.kind == "news"), key=lambda i: i.published, reverse=True)
                 items = news[:self.max_articles] + [i for i in items if i.kind != "news"]
             raw[h.symbol] = items
+        if self.fetch_text:
+            from .ingest.fulltext import enrich
+            enrich([i for v in raw.values() for i in v], self.text_cache)
         return raw, errors
 
     # -- Stage 3 --------------------------------------------------------------------
@@ -85,6 +90,10 @@ class Pipeline:
     # -- Stages 3+4 -----------------------------------------------------------------
     def classify_and_validate(self, holdings, raw):
         names = {h.symbol: h.name for h in holdings}
+        if hasattr(self.clf, "prefetch"):   # batch labelling (claude-code mode)
+            self.clf.prefetch([(i, names[sym]) for sym, its in raw.items() for i in its
+                               if i.prelabel is None and i.url.strip()
+                               and not self.cache.get(item_key(i.url, i.title, i.snippet, self.clf.model_id, PROMPT_VERSION))])
         lookback = self.r["windows"]["news_days"]
         kept: dict[str, list[LabelledItem]] = {h.symbol: [] for h in holdings}
         dropped: list[Dropped] = []
@@ -96,7 +105,7 @@ class Pipeline:
                 reason = validate_label(it, label_d, self.r, self.as_of, lookback)
                 raw_log.append({"symbol": sym, "url": it.url, "attempt": 1, "cached": cached,
                                 "reason": reason, "raw": resp})
-                if reason and not reason.startswith(("missing_", "invalid_source", "date_")):
+                if reason and not reason.startswith(("missing_", "invalid_source", "date_", "not_about_company")):
                     # model-side failure: retry exactly once, bypassing the cache
                     label_d, resp, cached = self._classify_one(it, names[sym], bypass_cache=True)
                     attempts = 2
@@ -110,8 +119,8 @@ class Pipeline:
         return kept, dropped, raw_log
 
     # -- Full run -------------------------------------------------------------------
-    def run(self, holdings: list[Holding]) -> dict:
-        raw, ingest_errors = self.ingest(holdings)
+    def run(self, holdings: list[Holding], ingested=None) -> dict:
+        raw, ingest_errors = ingested or self.ingest(holdings)
         kept, dropped, raw_log = self.classify_and_validate(holdings, raw)
         dcount: dict[str, int] = {}
         for d in dropped:

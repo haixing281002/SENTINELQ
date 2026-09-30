@@ -13,6 +13,8 @@ The LLM only labels text; all scores come from the fixed rubric in `rubric/rubri
 | 6 Report (IC scorecard PDF, xlsx, csv/json, audit trail) | `pdf.py`, `narrate.py`, `report.py` |
 
 ## Run
+**No API key needed:** the default `--classifier claude-code` uses your logged-in Claude Code (`claude -p`); see `docs/NO_API_KEY.md`, which also covers the file hand-off mode. The commands below with `ANTHROPIC_API_KEY` are the optional API path (`--classifier anthropic`).
+
 ```bash
 pip install -e ".[llm,prices]"
 export ANTHROPIC_API_KEY=...
