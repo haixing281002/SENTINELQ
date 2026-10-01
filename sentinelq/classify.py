@@ -77,11 +77,21 @@ def item_payload(item: RawItem, company: str) -> dict:
             "headline": item.title, "text": item.snippet or "(headline only)"}
 
 
+def batch_schema(r: Rubric) -> dict:
+    """JSON schema for a batch reply: {"labels": [{"id", ...label fields}]}. Enforced by `claude --json-schema`, so the
+    event type is always from the fixed taxonomy and sentiment is always an integer in range (the doc's 'forced structure')."""
+    props = dict(tool_schema(r)["input_schema"]["properties"])
+    item = {"type": "object", "properties": {"id": {"type": "string"}, **props},
+            "required": ["id", "event_type", "sentiment", "rationale", "governance_flag", "about_company"],
+            "additionalProperties": False}
+    return {"type": "object", "properties": {"labels": {"type": "array", "items": item}}, "required": ["labels"], "additionalProperties": False}
+
+
 def batch_prompt(pairs: list[tuple[RawItem, str]], r: Rubric) -> str:
     """One prompt labelling many independent items; used by the no-API-key paths."""
     schema = tool_schema(r)["input_schema"]
     return (SYSTEM.replace("You must answer by calling the label_item tool.", "") +
-            "\n\nLabel EACH item below independently. Reply with ONLY a JSON array (no prose, no code fence), one "
+            "\n\nLabel EACH item below independently. Reply with a JSON object {\"labels\": [...]} (no prose, no code fence), one "
             "object per item, each with an \"id\" field copied from the item plus the fields of this JSON schema:\n" +
             json.dumps(schema) + "\n\nITEMS:\n" + "\n".join(json.dumps(item_payload(i, c)) for i, c in pairs))
 

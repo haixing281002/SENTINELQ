@@ -225,7 +225,7 @@ def test_batch_failure_is_split_down_and_recovered(tmp_path, monkeypatch):
     from sentinelq import claude_code as cc
     from sentinelq.classify import item_id
 
-    def fake(prompt, model=None, timeout=600):
+    def fake(prompt, model=None, timeout=600, **kw):
         n = prompt.count('"id": "')
         if n > 2:
             raise RuntimeError("claude CLI failed (1): request timed out")
@@ -246,7 +246,7 @@ def test_single_bad_item_is_isolated_and_reported(tmp_path, monkeypatch):
     pairs = _items(6)
     bad = item_id(pairs[3][0])
 
-    def fake(prompt, model=None, timeout=600):
+    def fake(prompt, model=None, timeout=600, **kw):
         if bad in prompt:
             return "I cannot label this."
         return _fake_reply(prompt)
@@ -263,7 +263,7 @@ def test_rate_limit_aborts_early_and_keeps_saved_labels(tmp_path, monkeypatch):
     monkeypatch.setattr(cc, "BACKOFF", (0, 0))
     calls = {"n": 0}
 
-    def fake(prompt, model=None, timeout=600):
+    def fake(prompt, model=None, timeout=600, **kw):
         calls["n"] += 1
         if calls["n"] == 1:
             return _fake_reply(prompt)
@@ -297,7 +297,7 @@ def test_partial_failure_is_reported_as_label_failed_not_irrelevant(tmp_path, mo
     news = FileNews(FX / "news.json")
     victim = news.fetch(hold[0], AS_OF, AS_OF)[0]
 
-    def fake(prompt, model=None, timeout=600):
+    def fake(prompt, model=None, timeout=600, **kw):
         if item_id(victim) in prompt:
             raise RuntimeError("claude CLI failed (1): weird")
         return _fake_reply(prompt)
@@ -952,3 +952,133 @@ def test_default_is_100_articles_per_stock():
     from sentinelq import cli
     src = (ROOT / "sentinelq" / "cli.py").read_text()
     assert 'default=100, help="latest N articles per company' in src
+
+
+# ---- enforced schema, step tracker, audit record, verify/render tools -------------------------------------------
+def test_labeller_requests_enforced_schema_and_reads_structured_reply(tmp_path, monkeypatch):
+    from sentinelq import claude_code as cc
+    from sentinelq.classify import batch_schema
+    seen = {}
+
+    def fake(prompt, model=None, timeout=600, schema=None):
+        seen["schema"] = schema
+        return _fake_reply(prompt).replace("[{", '{"labels":[{', 1)[:-1] + "]}" if False else json.dumps({"labels": json.loads(_fake_reply(prompt))})
+    monkeypatch.setattr(cc, "run_claude", fake)
+    monkeypatch.setattr(cc, "schema_supported", lambda: True)
+    clf = cc.ClaudeCodeClassifier(load_rubric(), batch_size=4, workers=1, log_path=tmp_path / "l.jsonl")
+    clf.prefetch(_items(3))
+    assert len(clf._res) == 3 and seen["schema"] == batch_schema(load_rubric())
+    props = seen["schema"]["properties"]["labels"]["items"]["properties"]
+    assert set(props["event_type"]["enum"]) == set(load_rubric().event_types) and props["sentiment"]["maximum"] == 2
+
+
+def test_schema_flag_failure_falls_back_to_validated_text(tmp_path, monkeypatch):
+    from sentinelq import claude_code as cc
+    calls = []
+
+    def fake(prompt, model=None, timeout=600, schema=None):
+        calls.append(schema is not None)
+        if schema is not None:
+            raise RuntimeError("claude CLI failed (1): unknown option --json-schema")
+        return _fake_reply(prompt)
+    monkeypatch.setattr(cc, "run_claude", fake)
+    monkeypatch.setattr(cc, "schema_supported", lambda: True)
+    clf = cc.ClaudeCodeClassifier(load_rubric(), batch_size=4, workers=1, log_path=tmp_path / "l.jsonl")
+    clf.prefetch(_items(3))
+    assert len(clf._res) == 3 and calls == [True, False] and clf.use_schema is False       # tried, fell back, carried on
+
+
+def test_windows_cmd_shim_skips_schema(monkeypatch):
+    from sentinelq import claude_code as cc
+    monkeypatch.setattr(cc, "find_claude", lambda: r"C:\Users\x\AppData\Roaming\npm\claude.cmd")
+    monkeypatch.setattr("os.name", "nt", raising=False)
+    assert cc.schema_supported() is False
+
+
+def test_display_tags_every_step_and_tracks_each_stock(tmp_path):
+    import io
+    from sentinelq.progress import Display
+    buf = io.StringIO()
+    r = load_rubric()
+    hold = load_portfolio(ROOT / "examples" / "portfolio.csv")
+    Pipeline(r, FileNews(FX / "news.json"), None, None, KeywordClassifier(), tmp_path / "o", tmp_path / "c.jsonl", AS_OF,
+             ui=Display("plain", tmp_path / "run.log", stream=buf)).run(hold)
+    out = buf.getvalue()
+    for n, name in enumerate(["INPUT", "INGEST", "CLASSIFY", "VALIDATE", "SCORE", "REPORT"], 1):
+        assert f"[STEP {n}/6 {name}]" in out, name
+    assert "STEP TRACKER" in out and "progress: 1 Input" in out and "governance 100 -20 regulatory action -8 management exit = 72 FLAG" in out
+    log = (tmp_path / "run.log").read_text()                                              # the same record goes to the log file
+    assert all(f"[STEP {n}/6 {name}]" in log for n, name in enumerate(["INPUT", "INGEST", "CLASSIFY", "VALIDATE", "SCORE", "REPORT"], 1))
+    assert log.count("[STEP 2/6 INGEST]") == len(hold) and log.count("[STEP 5/6 SCORE]") == len(hold)   # once per stock per step
+
+
+def test_audit_record_is_complete_and_checksums_match(tmp_path):
+    import hashlib
+    from sentinelq.ingest.gnews import GoogleNewsRSS
+    r = load_rubric()
+    opener, _ = _gn_opener(per_window=5, title="Angel One")
+    hold = load_portfolio(ROOT / "examples" / "portfolio.csv")[:1]
+    Pipeline(r, GoogleNewsRSS(sleep=lambda s: None, opener=opener), None, None, KeywordClassifier(), tmp_path / "o", tmp_path / "c.jsonl",
+             date(2026, 7, 3), max_articles=10, governance_pass=False).run(hold)
+    ad = tmp_path / "o" / "audit"
+    rec = (ad / "RUN_RECORD.md").read_text()
+    for h in ("## Parameters", "## Step 1 - Input", "## Step 2 - Ingest", "## Step 3 - Classify", "## Step 4 - Validate", "## Step 5 - Score", "## Step 6 - Report"):
+        assert h in rec, h
+    qs = [json.loads(l) for l in (ad / "queries.jsonl").read_text().splitlines()]
+    assert qs and all(q["status"] == "ok" and "news.google.com/rss/search" in q["url"] for q in qs)
+    man = json.loads((ad / "manifest.json").read_text())
+    assert man["rubric_sha256"] == r.sha256 and "sentinelq_scorecard.pdf" in man["files"]
+    for rel, info in man["files"].items():
+        assert hashlib.sha256((tmp_path / "o" / rel).read_bytes()).hexdigest() == info["sha256"], rel
+    assert "sentiment-total" in (ad / "score_workings.csv").read_text()
+
+
+def _quick_run(tmp_path, name="o"):
+    r = load_rubric()
+    hold = load_portfolio(ROOT / "examples" / "portfolio.csv")
+    Pipeline(r, FileNews(FX / "news.json"), FileActions(FX / "actions.json"), None, KeywordClassifier(), tmp_path / name,
+             tmp_path / "c.jsonl", AS_OF).run(hold)
+    return tmp_path / name
+
+
+def test_verify_reproduces_scores_and_catches_tampering(tmp_path, capsys):
+    from sentinelq import tools
+    run = _quick_run(tmp_path)
+    assert tools.main(["verify", str(run)]) == 0 and "ALL SCORES REPRODUCED" in capsys.readouterr().out
+    p = run / "scores.json"
+    d = json.loads(p.read_text())
+    d[0]["governance_score"] = 95.0
+    p.write_text(json.dumps(d))
+    assert tools.main(["verify", str(run)]) == 1 and "MISMATCH" in capsys.readouterr().out
+    ev = run / "evidence.json"                                                       # also catches an edited label
+    d[0]["governance_score"] = 72.0
+    p.write_text(json.dumps(d))
+    rows = json.loads(ev.read_text())
+    next(x for x in rows if x["event_type"] == "regulatory_action")["event_type"] = "other"
+    ev.write_text(json.dumps(rows))
+    assert tools.main(["verify", str(run)]) == 1
+
+
+def test_render_rebuilds_pdf_from_saved_files_and_picks_up_edited_commentary(tmp_path, capsys):
+    import pymupdf
+    from sentinelq import tools
+    run = _quick_run(tmp_path)
+    nar = json.loads((run / "narrative.json").read_text())
+    nar["holdings"]["ANGELONE"]["one_line_read"] = "EDITED BY A HUMAN"
+    (run / "narrative.json").write_text(json.dumps(nar))
+    assert tools.main(["render", str(run), "--out-name", "rebuilt.pdf"]) == 0
+    text = " ".join(" ".join(pg.get_text().split()) for pg in pymupdf.open(run / "rebuilt.pdf"))     # PDF wraps cell text
+    assert "EDITED BY A HUMAN" in text and "Scoring rubric" in text
+
+
+def test_inspect_input_lists_aliases(capsys):
+    from sentinelq import tools
+    assert tools.main(["inspect", "input", "--pick", "Titan Company"]) == 0
+    assert "Titan Company|Titan Co|Titan Industries" in capsys.readouterr().out
+
+
+def test_every_step_has_a_skill():
+    for n in ("step1-input", "step2-ingest", "step3-classify", "step4-validate", "step5-score", "step6-report"):
+        f = ROOT / ".claude" / "skills" / f"sentinelq-{n}" / "SKILL.md"
+        assert f.exists() and f.read_text().startswith("---\nname: sentinelq-" + n)
+    assert (ROOT / ".claude" / "skills" / "sentinelq-audit" / "SKILL.md").exists()

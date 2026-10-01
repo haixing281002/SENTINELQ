@@ -53,3 +53,11 @@ Deliberate fixes vs the reference: rupee shown as "Rs" (the reference printed bl
 
 ## News retrieval
 Free sources only. `--news gnews` (default): Google News RSS, the mechanism extracted from Harshil's script (`docs/NEWS_MECHANISM.md`); `--news gdelt`: GDELT DOC API (`docs/GDELT.md`). Both roll back newest-first, stop at the latest 100 articles whose title names the company (12-month max; set `--max-articles`), and keep articles in memory only - never stored.
+
+## Following and verifying a run
+* Every console/log line is tagged `[STEP n/6 NAME]` with what is being done, plus a per-stock **step tracker** (`work/run.log` has the same text: `tail -f work/run.log`).
+* Each run writes `runs/<date>/audit/`: `RUN_RECORD.md` (readable record of Steps 1-6), `score_workings.csv` (every number behind every score), `queries.jsonl`
+  (exact news requests), `manifest.json` (parameters, versions, rubric hash, sha256 of every output).
+* `python -m sentinelq verify runs/<date>` recomputes every score from the saved evidence; `render` rebuilds the PDF from `scores.json` + editable `narrative.json`;
+  `inspect input|news|label` runs one step on one stock/headline. Skills: `sentinelq-step1-input` ... `sentinelq-step6-report`, `sentinelq-audit`.
+* Conformance with the architecture document, including gaps: `docs/PIPELINE_CONFORMANCE.md`.

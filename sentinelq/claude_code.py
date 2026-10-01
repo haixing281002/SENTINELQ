@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
-from .classify import batch_prompt, item_id
+from .classify import batch_prompt, batch_schema, item_id
 from .models import RawItem
 from .narrate import SYSTEM as NARR_SYSTEM, TOOL as NARR_TOOL, default_observations, evidence_payload
 from .rubric import Rubric
@@ -64,13 +64,22 @@ def preflight(model: str | None = None) -> None:
     print(f"  [claude-code] preflight ok ({exe}) -> {out.strip()[:20]!r}")
 
 
-def run_claude(prompt: str, model: str | None = None, timeout: int = 600) -> str:
+def schema_supported() -> bool:
+    """--json-schema passes JSON on the command line; the Windows npm shim (claude.cmd) mangles quotes, so only use it with a real exe."""
+    import os
+    exe = find_claude() or ""
+    return not (os.name == "nt" and exe.lower().endswith((".cmd", ".bat")))
+
+
+def run_claude(prompt: str, model: str | None = None, timeout: int = 600, schema: dict | None = None) -> str:
     exe = find_claude()
     if not exe:
         raise FileNotFoundError(INSTALL_HELP)
     cmd = [exe, "-p", "--output-format", "json", "--no-session-persistence"]
     if model:
         cmd += ["--model", model]
+    if schema:
+        cmd += ["--json-schema", json.dumps(schema, separators=(",", ":"))]
 
     def go(c):
         with tempfile.TemporaryDirectory() as cwd:   # neutral cwd: don't load any project context
@@ -85,6 +94,8 @@ def run_claude(prompt: str, model: str | None = None, timeout: int = 600) -> str
     out = json.loads(p.stdout)
     if out.get("is_error"):
         raise RuntimeError(f"claude CLI error: {out.get('result')}")
+    if schema and out.get("structured_output") is not None:      # schema-enforced reply
+        return json.dumps(out["structured_output"])
     return out["result"]
 
 
@@ -140,6 +151,7 @@ class ClaudeCodeClassifier:
         self.on_fail = None                    # callback(item, error_text)
         self.say = lambda msg, bad=False: print(msg)
         self.abort = False
+        self.use_schema = True                 # enforce the label schema via claude --json-schema (falls back to validated text)
         self.log_path = Path(log_path)
         self._lock = threading.Lock()
 
@@ -157,7 +169,15 @@ class ClaudeCodeClassifier:
             if self.abort:
                 return set(), "aborted after repeated rate-limit/usage errors"
             try:
-                txt = run_claude(batch_prompt(pairs, self.r), self.model)
+                schema = batch_schema(self.r) if (self.use_schema and schema_supported()) else None
+                try:
+                    txt = run_claude(batch_prompt(pairs, self.r), self.model, schema=schema)
+                except Exception as e1:
+                    if schema is None or any(h in str(e1).lower() for h in RATE_HINTS):
+                        raise
+                    self.use_schema = False        # flag unsupported / rejected: continue with text + our own validation
+                    self._log(ids=ids, attempt=attempt, note="--json-schema failed, falling back to validated text", error=str(e1)[:300])
+                    txt = run_claude(batch_prompt(pairs, self.r), self.model)
             except Exception as e:
                 err = f"{type(e).__name__}: {e}"[:500]
                 self._log(ids=ids, attempt=attempt, error=err)

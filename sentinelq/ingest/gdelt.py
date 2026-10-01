@@ -34,6 +34,7 @@ class GdeltNews:
         self.slice_days = max(7, min(int(slice_days), 90))
         self.sleep = sleep
         self.opener = opener or urllib.request.urlopen
+        self.audit: list[dict] = []            # every request made: label, url, outcome (written to audit/queries.jsonl)
         self.on_event = None                   # callback(message) for the run display
         self.stop_when = None                  # callable(items) -> True once enough articles are in hand
         self._last = 0.0
@@ -66,11 +67,13 @@ class GdeltNews:
                 last, kind = f"{type(e).__name__}: {e}", "network"
             else:
                 if body.lstrip()[:1] in ("{", "[") or not body.strip():
+                    self.audit.append({"label": label, "url": url, "status": "ok", "attempts": attempt + 1, "bytes": len(body)})
                     return body
                 last, kind = "rate-limit notice: " + body.strip()[:80], "limit"
             if attempt < self.retries:
                 self._say(f"[GDELT] {label}: {last} - waiting {wait:.0f}s (retry {attempt + 1}/{self.retries})")
                 self.sleep(min(wait, 120))
+        self.audit.append({"label": label, "url": url, "status": "failed", "attempts": self.retries + 1, "error": last})
         exc = GdeltRateLimited if kind == "limit" else GdeltUnreachable
         raise exc(f"GDELT gave no usable answer for {label} after {self.retries + 1} attempts ({last})")
 

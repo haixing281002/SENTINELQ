@@ -176,6 +176,7 @@ class Pipeline:
 
         for idx, h in enumerate(holdings, 1):
             t0 = time.time()
+            ui.begin(h.symbol, 2)
             ui.status(f"Scraping {idx}/{n}  {h.symbol}: rolling the window back for the latest {self.max_articles or 'all'} articles ...",
                       "ingest", idx - 1, n)
             items, found, errs = self._fetch_stock(h)
@@ -251,6 +252,15 @@ class Pipeline:
             self.cache.put(key, label, raw)
         return label, raw, False
 
+    def _params(self) -> dict:
+        return {"news_source": type(self.news).__name__ if self.news else None, "actions_source": type(self.actions).__name__ if self.actions else None,
+                "prices_source": type(self.prices).__name__ if self.prices else None, "max_articles_per_stock": self.max_articles,
+                "governance_pass": self.governance_pass, "governance_cap": self.governance_cap, "full_text": self.fetch_text,
+                "generic_headline_prefilter": self.prefilter, "as_of": self.as_of.isoformat(), "mode": self.mode,
+                "classifier": self.clf.model_id, "schema_enforced": bool(getattr(self.clf, "use_schema", False)),
+                "max_label_failure_rate": self.max_label_failure, "allow_missing_news": self.allow_missing_news,
+                "label_cache_on_disk": bool(self.cache.path)}
+
     def _wire_classifier(self):
         if hasattr(self.clf, "prefetch"):
             def persist(it, d, raw_):       # persist the LABEL immediately: an aborted run keeps its work
@@ -273,7 +283,7 @@ class Pipeline:
             items = keep
         need = [(i, h.name) for i in items if i.prelabel is None and i.url.strip()]
         todo = [(i, c) for i, c in need if not self.cache.get(self._key(i))]
-        ui.label_start(len(todo), len(need) - len(todo), Counter(i.symbol for i, _ in todo))
+        ui.label_start(len(todo), len(need) - len(todo), Counter(i.symbol for i, _ in todo), h.symbol)
         sequential = not hasattr(self.clf, "prefetch")
         if not sequential:
             self.clf.prefetch(todo)
@@ -380,7 +390,7 @@ class Pipeline:
         run = {"as_of": self.as_of.isoformat(), "generated_at": datetime.now().isoformat(timespec="seconds"),
                "sentinelq_version": __version__, "rubric_version": self.r.version,
                "rubric_sha256": self.r.sha256, "classifier_model": self.clf.model_id,
-               "prompt_version": PROMPT_VERSION, "mode": self.mode,
+               "prompt_version": PROMPT_VERSION, "mode": self.mode, "title": self.meta["title"], "coverage": self.meta["coverage"],
                "totals": {"label_failed": len(failed), "retrieved": sum(len(v) for v in raw.values()),
                           "kept": sum(len(v) for v in kept.values()), "dropped": len(dropped)}}
         result = dict(run=run, scores=scores, kept=kept, dropped=dropped, coverage=coverage,
@@ -392,13 +402,16 @@ class Pipeline:
             for sc, out in zip(scores, ex.map(lambda sc: self.narrator.holding(sc, kept[sc.symbol]), scores)):
                 narr[sc.symbol] = out
                 done_n += 1
-                ui.narrate(done_n, len(scores), sc.name)
+                ui.narrate(done_n, len(scores), sc.name, sc.symbol)
         ui.clear_status()
         ui.note("  writing portfolio-level observations ...", "d")
         obs = self.narrator.portfolio(portfolio_facts(scores, kept))
         result.update(narrative=narr, observations=obs)
         (self.out / "narrative.json").write_text(json.dumps({"holdings": narr, "observations": obs}, indent=2), encoding="utf-8")
         build_pdf(self.out / "sentinelq_scorecard.pdf", result, self.r, narr, obs, self.meta)
+        from .audit import write_audit
+        write_audit(self.out, result, self.r, self._params(), list(getattr(self.news, "audit", [])))
+        ui.note("[STEP 6/6 REPORT] audit record written: " + str(self.out / "audit" / "RUN_RECORD.md"), "g")
         t = run["totals"]
         ui.finish({"retrieved": t["retrieved"], "kept": t["kept"], "dropped": t["dropped"],
                    "label failures": t["label_failed"], "stocks": len(scores),

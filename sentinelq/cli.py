@@ -8,6 +8,11 @@ from .rubric import load_rubric
 
 
 def main(argv=None):
+    import sys
+    args = sys.argv[1:] if argv is None else list(argv)
+    if args and args[0] in ("inspect", "verify", "render"):      # manual-verification tools (see tools.py)
+        from .tools import main as tools_main
+        raise SystemExit(tools_main(args))
     p = argparse.ArgumentParser(prog="sentinelq", description="Sentinel Q pipeline")
     p.add_argument("--portfolio", help="CSV with symbol,name,sector[,cap,weight]")
     p.add_argument("--pick", help="comma-separated names/tickers to look up in --universe")

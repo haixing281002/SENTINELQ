@@ -70,6 +70,7 @@ class GoogleNewsRSS:
         self.retries, self.backoff, self.marks = retries, backoff, tuple(marks)
         self.sleep = sleep
         self.opener = opener or urllib.request.urlopen
+        self.audit: list[dict] = []            # every request made: label, url, outcome (written to audit/queries.jsonl)
         self.on_event = None                    # callback(message) for the run display
         self.stop_when = None                   # callable(items) -> True once enough articles are in hand
         self._last = 0.0
@@ -93,6 +94,7 @@ class GoogleNewsRSS:
                 with self.opener(urllib.request.Request(url, headers=HEADERS), timeout=self.timeout) as r:
                     body = r.read()
                 if body.lstrip()[:5] in (b"<?xml", b"<rss ") or b"<rss" in body[:200]:
+                    self.audit.append({"label": label, "url": url, "status": "ok", "attempts": attempt + 1, "bytes": len(body)})
                     return body
                 last, kind = "non-RSS reply (likely a consent / block page)", "limit"
             except urllib.error.HTTPError as e:

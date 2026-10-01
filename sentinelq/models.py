@@ -54,7 +54,8 @@ class LabelledItem:
     def to_row(self) -> dict:
         d = {"symbol": self.item.symbol, "date": self.item.published,
              "headline": self.item.title, "url": self.item.url,
-             "kind": self.item.kind}
+             "kind": self.item.kind, "purpose": self.item.purpose, "source": self.item.source,
+             "style": self.item.style, "parse": self.item.parse}
         if self.label:
             d.update(event_type=self.label.event_type, sentiment=self.label.sentiment,
                      rationale=self.label.rationale,

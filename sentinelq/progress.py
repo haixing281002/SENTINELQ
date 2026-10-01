@@ -12,6 +12,13 @@ from collections import Counter
 from pathlib import Path
 
 STAGES = ["Input", "Ingest", "Classify", "Validate", "Score", "Report"]
+NAMES = {i + 1: n.upper() for i, n in enumerate(STAGES)}
+WHAT = {1: "read the stock list", 2: "fetch news + corporate actions (source URL and date on every item)",
+        3: "the model labels each article (fixed taxonomy, sentiment -2..+2, governance flag)",
+        4: "schema / source / date checks; failures retried once, then dropped with a reason",
+        5: "deterministic rubric arithmetic - no model", 6: "workbook, commentary, PDF, audit record"}
+GLYPH = {".": "\u25cb", "~": "\u25d0", "+": "\u2714", "x": "\u2716"}
+GLYPH_ASCII = {".": ".", "~": "~", "+": "+", "x": "x"}
 C = {"g": "32", "r": "31", "y": "33", "b": "34", "c": "36", "m": "35", "d": "2", "B": "1"}
 
 
@@ -48,6 +55,7 @@ class Display:
         except Exception:
             pass
         self.stage_t: dict[str, float] = {}
+        self.track: dict[str, list[str]] = {}
         self.current = "-"
         self.stock_left, self.stock_bad = Counter(), Counter()
         self.label_total = self.label_done = self.label_fail = 0
@@ -124,6 +132,28 @@ class Display:
         rate = (time.time() - since) / done
         return f" ETA {fmt_t(rate * (total - done))}"
 
+    # ---- step tracker: which of the six steps each stock is at --------------------------------------------
+    def track_init(self, symbols) -> None:
+        self.track = {sym: ["."] * 6 for sym in symbols}
+
+    def track_set(self, sym: str, step: int, state: str) -> None:
+        if sym in self.track:
+            self.track[sym][step - 1] = state
+
+    def track_summary(self) -> str:
+        n = len(self.track) or 1
+        return " | ".join(f"{i} {NAMES[i].title()} {sum(1 for v in self.track.values() if v[i - 1] == '+')}/{n}" for i in range(1, 7))
+
+    def tracker(self) -> None:
+        g = GLYPH_ASCII if self.ascii else GLYPH
+        self.line("  STEP TRACKER   " + "  ".join(f"{i} {NAMES[i].title():<8}" for i in range(1, 7)), "B")
+        for sym, st in self.track.items():
+            self.line(f"  {sym:<14}" + "  ".join(f"{g[x]:<10}" for x in st))
+        self.line("  legend: " + f"{g['.']} pending  {g['~']} running  {g['+']} done  {g['x']} failed", "d")
+
+    def step(self, n: int, msg: str, *codes: str) -> None:
+        self.line(f"[STEP {n}/6 {NAMES[n]}] {msg}", *codes)
+
     # ---- stages -------------------------------------------------------------------------------------------
     def stage(self, name: str, detail: str = "") -> None:
         with self.lock:
@@ -145,13 +175,24 @@ class Display:
         self.line(f"  {'stocks':<14} {len(holdings)}: " + ", ".join(h.symbol for h in holdings[:12]) + (" ..." if len(holdings) > 12 else ""))
         if self.log:
             self.line(f"  {'live log':<14} tail -f {self.log.name}")
+        self.track_init([h.symbol for h in holdings])
+        for h in holdings:
+            self.track_set(h.symbol, 1, "+")
+        self.step(1, f"{WHAT[1]}: {len(holdings)} stock(s) (symbol, company, sector) - nothing else is required", "B")
+        for h in holdings:
+            self.line(f"        {h.symbol:<14} {h.name:<38} {h.sector}{' / ' + h.cap if h.cap else ''}", "d")
+        self.line("")
+        self.line("  The six steps every stock passes, in order:", "B")
+        for i in range(1, 7):
+            self.line(f"    {i}. {NAMES[i].title():<9} {WHAT[i]}", "d")
 
     # ---- ingest -------------------------------------------------------------------------------------------
     def ingest_stock(self, idx: int, n: int, h, found: int, kept: int, actions: int, styles: Counter,
                      from_cache: bool, errors: list[str], secs: float, cap: int | None = None, spark=None) -> None:
         self.counts["articles"] += kept
-        head = f"[{idx:>2}/{n}] {h.symbol:<12} {h.name}  ({h.sector}{' - ' + h.cap if h.cap else ''})"
-        self.line(head, "B")
+        self.track_set(h.symbol, 2, "x" if errors else "+")
+        head = f"{idx:>2}/{n} {h.symbol:<12} {h.name}  ({h.sector}{' - ' + h.cap if h.cap else ''}) - {WHAT[2]}"
+        self.step(2, head, "B")
         cap_note = f" (capped from {found})" if found > kept else ""
         src = "cache" if from_cache else f"{secs:.1f}s"
         self.line(f"        news    {self._bar(kept, cap or max(found, kept, 1), 20)} {kept} articles{cap_note}  [{src}]")
@@ -165,6 +206,9 @@ class Display:
             self.line(f"        ERROR   {e}", "r")
         self.status(f"Ingest {idx}/{n}  {h.symbol}", "ingest", idx, n)
 
+    def begin(self, sym: str, step: int) -> None:
+        self.track_set(sym, step, "~")
+
     def fulltext(self, done: int, total: int) -> None:
         self.status(f"Fetching article text  {self._bar(done, total)} {done}/{total}{self._eta(done, total, self._stage_start)}",
                     "fulltext", done, total)
@@ -175,12 +219,15 @@ class Display:
         self.line(f"        {h.symbol:<12} parse: " + " | ".join(f"{k} {v}" for k, v in parse.most_common()), "d")
 
     # ---- classify -----------------------------------------------------------------------------------------
-    def label_start(self, total: int, cached: int, per_stock: Counter | None = None) -> None:
+    def label_start(self, total: int, cached: int, per_stock: Counter | None = None, sym: str = "") -> None:
         self.label_total, self.label_done, self.label_fail = total, 0, 0
         self.stock_left = Counter(per_stock or {})
         self.stock_bad = Counter()
         self.label_t0 = time.time()
-        self.line(f"  {total} items to label with the model  ({cached} already cached)")
+        for k in list(self.stock_left) + ([sym] if sym else []):
+            self.track_set(k, 3, "~")
+        who = f"{sym}: " if sym else ""
+        self.step(3, f"{who}model reads {total} article(s) ({cached} already labelled in cache) - {WHAT[3]}", "B")
         self.status(f"Labelling {self._bar(0, max(total, 1))} 0/{total}", "label", 0, max(total, 1))
 
     def _label_bar(self) -> None:
@@ -195,6 +242,7 @@ class Display:
             self.stock_bad[sym] += failed
             if self.stock_left[sym] == 0:
                 bad = self.stock_bad[sym]
+                self.track_set(sym, 3, "x" if bad else "+")
                 self.line(f"  \u2714 {sym} finished labelling" + (f" ({bad} failed)" if bad else ""), "y" if bad else "g")
 
     def item_labelled(self, item, label: dict) -> None:
@@ -238,19 +286,29 @@ class Display:
     def stock_validated(self, h, kept: int, total: int, dropped: Counter, events: Counter, mean: float | None) -> None:
         drop = ", ".join(f"{v} {k}" for k, v in dropped.most_common()) or "none"
         ev = ", ".join(f"{k} {v}" for k, v in events.most_common(4)) or "-"
-        self.line(f"  {h.symbol:<12} kept {kept}/{total}  dropped: {drop}", "g" if not dropped else "y")
-        self.line(f"  {'':<12} events: {ev}", "d")
+        self.track_set(h.symbol, 3, "+" if self.track.get(h.symbol, ["."] * 6)[2] != "x" else "x")
+        self.track_set(h.symbol, 4, "+")
+        self.step(4, f"{h.symbol}: kept {kept}/{total}   dropped: {drop}", "g" if not dropped else "y")
+        self.line(f"        events kept: {ev}", "d")
+        self.line("        progress: " + self.track_summary(), "d")
 
     def scored(self, scores: list) -> None:
-        self.stage("Score", "deterministic rubric arithmetic (no model)")
-        self.line(f"  {'symbol':<12} {'sent':>5} {'gov':>5} {'label':<6} {'items':>5} {'dropped':>7}")
-        for s in scores:
-            col = "r" if s.governance_label == "Flag" else "y" if s.governance_label == "Watch" else "g"
-            sent = "n/a" if s.company_sentiment is None else f"{s.company_sentiment:+d}"
-            self.line(f"  {s.symbol:<12} {sent:>5} {s.governance_score:>5g} {s.governance_label:<6} {s.n_items:>5} {s.n_dropped:>7}"
-                      + ("  low confidence" if s.low_confidence else ""), col)
+        self.stage("Score", WHAT[5])
+        for sc in scores:
+            col = "r" if sc.governance_label == "Flag" else "y" if sc.governance_label == "Watch" else "g"
+            sent = "n/a" if sc.company_sentiment is None else (f"{sc.company_sentiment:+d}" if sc.company_sentiment else "0")
+            pens = " ".join(f"{p['penalty']:+g} {p['event_type'].replace('_', ' ')}" for p in sc.governance_penalties) or "no penalties"
+            ign = f", {len(sc.governance_ignored)} item(s) deliberately NOT penalised" if sc.governance_ignored else ""
+            self.track_set(sc.symbol, 5, "+")
+            self.step(5, f"{sc.symbol}: sentiment {sent} (weighted mean {sc.company_sentiment_raw} over {sc.n_items} kept items)  |  "
+                         f"governance 100 {pens} = {sc.governance_score:g} {sc.governance_label.upper() if sc.governance_label == 'Flag' else sc.governance_label}"
+                         f"{ign}" + ("  |  LOW CONFIDENCE" if sc.low_confidence else ""), col)
+        self.line("")
+        self.tracker()
 
-    def narrate(self, done: int, total: int, name: str) -> None:
+    def narrate(self, done: int, total: int, name: str, sym: str = "") -> None:
+        if sym:
+            self.track_set(sym, 6, "~")
         self.status(f"Writing commentary {self._bar(done, total)} {done}/{total}  {name[:28]}{self._eta(done, total, self._stage_start)}",
                     "narr", done, total)
 
@@ -261,7 +319,11 @@ class Display:
         with self.lock:
             self.clear_status()
             self.stage_t[self._stage] = time.time() - self._stage_start
+            for sym in self.track:
+                self.track_set(sym, 6, "+")
             self.line()
+            self.step(6, "files written (see list below); every number is reproducible with:  python -m sentinelq verify <run folder>", "B", "g")
+            self.tracker()
             self.line("== DONE", "B", "g")
             for k, v in summary.items():
                 self.line(f"  {k:<16} {v}")
