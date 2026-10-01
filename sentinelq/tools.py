@@ -216,6 +216,34 @@ def render(a) -> int:
     return 0
 
 
+def learn_cmd(a) -> int:
+    from . import learn as L
+    if a.what == "propose":
+        new = L.propose(Path(a.run_dir), Path(a.against) if a.against else None, Path(a.verified) if a.verified else None)
+        print(f"{len(new)} new proposal(s) from {a.run_dir} (nothing has been changed; a person must accept each one):")
+        for l in new:
+            print(f"  {l['id']}  step {l['step']} {L.STEP_NAME[l['step']]:<8} {l['title']}\n      -> {l['suggested_change']}")
+        return 0
+    if a.what == "review":
+        for l in L.load():
+            if a.status in ("all", l["status"]):
+                print(f"{l['id']}  [{l['status']}] step {l['step']} {l['title']}\n    {l['detail']}\n    suggested: {l['suggested_change']}")
+        return 0
+    if a.what == "accept":
+        patch = json.loads(a.rubric_patch) if a.rubric_patch else None
+        l = L.accept(a.id, a.note, a.expect_penalty, patch, a.applied_in)
+        print(f"accepted {l['id']}; tests: {l.get('tests_ref') or 'none (no golden case)'}; skill note updated")
+        return 0
+    if a.what == "reject":
+        L.reject(a.id, a.reason); print("rejected; will not be proposed again"); return 0
+    if a.what == "render":
+        L.render(); print("LESSONS.md refreshed in every step skill"); return 0
+    if a.what == "seed":
+        print(f"seeded {L.seed()}"); return 0
+    from collections import Counter
+    c = Counter(l["status"] for l in L.load()); print(dict(c)); return 0
+
+
 def main(argv: list[str]) -> int:
     p = argparse.ArgumentParser(prog="sentinelq")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -238,6 +266,13 @@ def main(argv: list[str]) -> int:
     q.add_argument("--url", default="https://example.com/inspect")
     q.add_argument("--date", default=date.today().isoformat())
     q.add_argument("--classifier", choices=["claude-code", "keyword"], default="claude-code")
+    ln = sub.add_parser("learn").add_subparsers(dest="what", required=True)
+    q = ln.add_parser("propose"); q.add_argument("run_dir"); q.add_argument("--against"); q.add_argument("--verified", default="portfolio/verified_events.csv")
+    ln.add_parser("review").add_argument("--status", default="proposed")
+    q = ln.add_parser("accept"); q.add_argument("id"); q.add_argument("--note", default=""); q.add_argument("--expect-penalty", type=float)
+    q.add_argument("--rubric-patch", help="JSON, deep-merged into rubric/learned_patch.json"); q.add_argument("--applied-in", default="")
+    q = ln.add_parser("reject"); q.add_argument("id"); q.add_argument("--reason", required=True)
+    ln.add_parser("render"); ln.add_parser("status"); ln.add_parser("seed")
     mg = sub.add_parser("merge")
     mg.add_argument("run_a")
     mg.add_argument("run_b")
@@ -253,6 +288,8 @@ def main(argv: list[str]) -> int:
     r.add_argument("--coverage")
     r.add_argument("--out-name")
     a = p.parse_args(argv)
+    if a.cmd == "learn":
+        return learn_cmd(a)
     if a.cmd == "inspect":
         return {"input": inspect_input, "news": inspect_news, "label": inspect_label}[a.what](a)
     return {"verify": verify, "render": render, "merge": merge}[a.cmd](a)

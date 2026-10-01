@@ -47,6 +47,12 @@ def load_rubric(path: str | Path | None = None, overrides: dict | None = None) -
     raw = p.read_bytes()
     data = json.loads(raw)
     ov = overrides or (json.loads(os.environ["SENTINELQ_RUBRIC_OVERRIDES"]) if os.environ.get("SENTINELQ_RUBRIC_OVERRIDES") else None)
+    patch = DEFAULT_RUBRIC.parent / "learned_patch.json"      # human-approved lessons (see sentinelq learn); only for the default rubric
+    if path is None and patch.exists() and not os.environ.get("SENTINELQ_NO_LEARNED_PATCH"):
+        lp = json.loads(patch.read_text(encoding="utf-8"))
+        data = _merge(data, {k: v for k, v in lp.items() if k != "learned_from"})
+        data["learned_from"] = lp.get("learned_from", [])
+        raw = json.dumps(data, sort_keys=True).encode()
     if ov:
         data = _merge(data, ov)
         raw = json.dumps(data, sort_keys=True).encode()

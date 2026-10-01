@@ -456,6 +456,7 @@ class Pipeline:
         if lint:
             ui.note(f"  price-language lint: removed {len(lint)} sentence(s) from sentiment commentary (share-price moves never feed sentiment)", "y")
         (self.out / "narrative.json").write_text(json.dumps({"holdings": narr, "observations": obs}, indent=2), encoding="utf-8")
+        (self.out / "lint.json").write_text(json.dumps(lint, indent=2), encoding="utf-8")
         build_pdf(self.out / "sentinelq_scorecard.pdf", result, self.r, narr, obs, self.meta)
         from .audit import write_audit
         write_audit(self.out, result, self.r, self._params(), list(getattr(self.news, "audit", [])))

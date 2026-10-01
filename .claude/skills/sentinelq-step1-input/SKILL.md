@@ -16,3 +16,6 @@ description: Step 1 of the Sentinel Q pipeline - read and resolve the stock list
 **Manually verify:** every stock appears once; sector is right (it drives sector sentiment); aliases are specific (e.g. Titan -> "Titan Company", never bare "Titan").
 Unknown stock? Add a row `symbol,name,sector,cap,weight,aliases` to `portfolio/universe.csv`; confirm ticker/sector with the user if unsure.
 Weights and cap are display-only and never affect a score.
+
+## Lessons (this step learns)
+Read `LESSONS.md` in this folder first if it exists (accepted, human-approved lessons for this step). After a run, use the `sentinelq-learn` skill: `python -m sentinelq learn propose runs/<date>`. Never apply a lesson without the person accepting it.

@@ -46,3 +46,6 @@ The PDF generator (`sentinelq/pdf.py`) already does this - do not hand-write a d
 
 ## The six steps are separate skills
 `sentinelq-step1-input`, `sentinelq-step2-ingest`, `sentinelq-step3-classify`, `sentinelq-step4-validate`, `sentinelq-step5-score`, `sentinelq-step6-report`, plus `sentinelq-governance` and `sentinelq-audit` (manual verification). Use them to run, inspect or explain one step; use this skill for the whole run. Always tell the user which step is running and what it is doing, and after a run point them to `audit/RUN_RECORD.md` and `python -m sentinelq verify <run>`.
+
+## Lessons (this step learns)
+Read `LESSONS.md` in this folder first if it exists (accepted, human-approved lessons for this step). After a run, use the `sentinelq-learn` skill: `python -m sentinelq learn propose runs/<date>`. Never apply a lesson without the person accepting it.

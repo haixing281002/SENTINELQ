@@ -64,3 +64,7 @@ Free sources only. `--news gnews` (default): Google News RSS, the mechanism extr
 
 ## Reconciliation fixes
 The seven fixes from the 1-Oct-2026 Reconciliation (retrieval policy, governance verification gate, written conventions, universe lock, price-language lint, minimum evidence standard, union-then-rescore) are implemented - see `docs/RECONCILIATION_FIXES.md` (what, where, tests, and what is still open).
+
+## Learning loop (human-approved)
+Each step skill keeps a `LESSONS.md`. After a run: `python -m sentinelq learn propose runs/<date>` (changes nothing) -> `learn review` -> `learn accept <id> --note ...` / `learn reject <id> --reason ...`.
+Accepting writes the lesson into the step's skill, generates a regression test in `tests/lessons/`, and can record a versioned patch in `rubric/learned_patch.json` (hash-covered). See `.claude/skills/sentinelq-learn/SKILL.md`.

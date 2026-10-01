@@ -1,0 +1,225 @@
+[
+  {
+    "id": "L-ac9b7689",
+    "kind": "seed:backdated_live_search",
+    "step": 2,
+    "title": "A backdated live search is not a point-in-time backtest",
+    "detail": "Re-running a live news index with a past cut-off loses the articles that dropped out of feeds; ~20 sentiment scores moved (Reconciliation cause 1).",
+    "evidence": [],
+    "suggested_change": "Past as-of date -> dated archive (GDELT) via --news auto; a live index with a past date is refused or stamped.",
+    "golden": null,
+    "status": "accepted",
+    "source_run": "Reconciliation 1-Oct-2026 s5-s7",
+    "created": "2026-10-01",
+    "tests_ref": [
+      "tests/test_reconciliation.py::test_backdated_live_search_is_refused_or_stamped_and_auto_uses_the_archive",
+      "tests/test_reconciliation.py::test_backdated_live_run_is_stamped_in_the_pdf"
+    ],
+    "note": "Seeded from the Reconciliation document.",
+    "accepted": "2026-10-01"
+  },
+  {
+    "id": "L-7b8d5dec",
+    "kind": "seed:collapsed_window",
+    "step": 2,
+    "title": "Sentiment needs the 12-month evidence window, not only the latest weeks",
+    "detail": "With only the last 2-6 weeks nothing can reach +2 and a 40% revenue fall cannot reach -1.",
+    "evidence": [],
+    "suggested_change": "Added a separate 12-month results pass and measured the evidence span per stock.",
+    "golden": null,
+    "status": "accepted",
+    "source_run": "Reconciliation 1-Oct-2026 s5-s7",
+    "created": "2026-10-01",
+    "tests_ref": [
+      "tests/test_reconciliation.py::test_fundamentals_pass_brings_the_full_year_results_prints_into_sentiment"
+    ],
+    "note": "Seeded from the Reconciliation document.",
+    "accepted": "2026-10-01"
+  },
+  {
+    "id": "L-829639d7",
+    "kind": "seed:direction_errors",
+    "step": 5,
+    "title": "Appointments, promotions and succession are never a management exit",
+    "detail": "Seven penalties were direction errors (AIA, 3M, Dr Reddy's, Titan, Nestle, AU SFB, Hindustan Copper).",
+    "evidence": [],
+    "suggested_change": "Verification gate + text safety net for people items.",
+    "golden": null,
+    "status": "accepted",
+    "source_run": "Reconciliation 1-Oct-2026 s5-s7",
+    "created": "2026-10-01",
+    "tests_ref": [
+      "tests/test_reconciliation.py::test_direction_error_is_not_penalised_when_the_gate_is_answered_correctly",
+      "tests/test_reconciliation.py::test_direction_error_is_caught_even_if_the_model_gets_the_gate_wrong"
+    ],
+    "note": "Seeded from the Reconciliation document.",
+    "accepted": "2026-10-01"
+  },
+  {
+    "id": "L-b803828c",
+    "kind": "seed:subject_errors",
+    "step": 5,
+    "title": "The company must be the subject of a penalised event",
+    "detail": "Macro duty hike, sector rule, compliance statement and a defrauded bank were penalised as company regulatory action / investigation.",
+    "evidence": [],
+    "suggested_change": "Subject / victim / macro rules in the gate.",
+    "golden": null,
+    "status": "accepted",
+    "source_run": "Reconciliation 1-Oct-2026 s5-s7",
+    "created": "2026-10-01",
+    "tests_ref": [
+      "tests/test_reconciliation.py::test_subject_error_is_not_penalised",
+      "tests/test_reconciliation.py::test_subject_error_is_caught_by_text_rules_when_the_model_omits_the_subject"
+    ],
+    "note": "Seeded from the Reconciliation document.",
+    "accepted": "2026-10-01"
+  },
+  {
+    "id": "L-9ab965ca",
+    "kind": "seed:materiality",
+    "step": 5,
+    "title": "Immaterial sums sit in the -5 procedural band",
+    "detail": "Rs 1.64 cr (Eicher) and Rs 64 lakh (Bank of Maharashtra) were scored at the -20 weight.",
+    "evidence": [],
+    "suggested_change": "Rs 10 cr materiality floor for non-integrity matters; integrity-type (SEBI conduct) exempt.",
+    "golden": null,
+    "status": "accepted",
+    "source_run": "Reconciliation 1-Oct-2026 s5-s7",
+    "created": "2026-10-01",
+    "tests_ref": [
+      "tests/test_reconciliation.py::test_eicher_rs_1_64_cr_customs_demand_is_procedural_not_minus_20",
+      "tests/test_reconciliation.py::test_integrity_type_matters_ignore_the_floor_angel_one_sebi_settlement_rs_4_28_cr"
+    ],
+    "note": "Seeded from the Reconciliation document.",
+    "accepted": "2026-10-01"
+  },
+  {
+    "id": "L-af382057",
+    "kind": "seed:same_event",
+    "step": 5,
+    "title": "One real-world event is one event, even when reported on several days / as several types",
+    "detail": "Nestle's FSSAI notice (14-Jun) and 'probe' (15-Jun) were both penalised; the real model later gave them different wording and keys.",
+    "evidence": [],
+    "suggested_change": "Same-event de-duplication within a family (7 days, shared distinctive words or key); different families (fraud probe vs CFO termination) stay separate.",
+    "golden": null,
+    "status": "accepted",
+    "source_run": "Reconciliation 1-Oct-2026 s5-s7",
+    "created": "2026-10-01",
+    "tests_ref": [
+      "tests/test_reconciliation.py::test_nestle_double_count_survives_different_wording_and_different_keys",
+      "tests/test_reconciliation.py::test_two_different_regulators_within_a_week_are_not_merged"
+    ],
+    "note": "Seeded from the Reconciliation document.",
+    "accepted": "2026-10-01"
+  },
+  {
+    "id": "L-70e10b18",
+    "kind": "seed:price_language",
+    "step": 3,
+    "title": "Share-price moves never feed sentiment",
+    "detail": "The July output cited 52-week highs, % moves and sell-offs as evidence.",
+    "evidence": [],
+    "suggested_change": "price_move event type, prompt rule, and a lint that strips price sentences from sentiment commentary.",
+    "golden": null,
+    "status": "accepted",
+    "source_run": "Reconciliation 1-Oct-2026 s5-s7",
+    "created": "2026-10-01",
+    "tests_ref": [
+      "tests/test_reconciliation.py::test_price_only_headlines_are_not_sentiment_evidence"
+    ],
+    "note": "Seeded from the Reconciliation document.",
+    "accepted": "2026-10-01"
+  },
+  {
+    "id": "L-93cc945a",
+    "kind": "seed:insufficient_data",
+    "step": 4,
+    "title": "Report Insufficient Data rather than a forced +1 or 0",
+    "detail": "Below 8 relevant articles, or with no results print in 12 months, sentiment was being forced.",
+    "evidence": [],
+    "suggested_change": "Minimum evidence standard in the rubric.",
+    "golden": null,
+    "status": "accepted",
+    "source_run": "Reconciliation 1-Oct-2026 s5-s7",
+    "created": "2026-10-01",
+    "tests_ref": [
+      "tests/test_reconciliation.py::test_insufficient_data_not_a_forced_score",
+      "tests/test_reconciliation.py::test_pipeline_reports_n_a_not_plus_one"
+    ],
+    "note": "Seeded from the Reconciliation document.",
+    "accepted": "2026-10-01"
+  },
+  {
+    "id": "L-e694e2dd",
+    "kind": "seed:universe",
+    "step": 1,
+    "title": "A holding must never appear or disappear silently",
+    "detail": "JB Chemicals vanished from the team run's universe (30 -> 29).",
+    "evidence": [],
+    "suggested_change": "Universe hash locked against the last confirmed run; --confirm-universe / --expect-count.",
+    "golden": null,
+    "status": "accepted",
+    "source_run": "Reconciliation 1-Oct-2026 s5-s7",
+    "created": "2026-10-01",
+    "tests_ref": [
+      "tests/test_reconciliation.py::test_universe_change_refuses_until_confirmed"
+    ],
+    "note": "Seeded from the Reconciliation document.",
+    "accepted": "2026-10-01"
+  },
+  {
+    "id": "L-daa85cd1",
+    "kind": "seed:memory_discount",
+    "step": 5,
+    "title": "The -5 memory discount applies only when nothing in the window was penalised",
+    "detail": "Kajaria's memory discount was kept alongside in-window penalties.",
+    "evidence": [],
+    "suggested_change": "Convention in the rubric and code.",
+    "golden": null,
+    "status": "accepted",
+    "source_run": "Reconciliation 1-Oct-2026 s5-s7",
+    "created": "2026-10-01",
+    "tests_ref": [
+      "tests/test_reconciliation.py::test_memory_discount_only_when_no_in_window_penalty_exists"
+    ],
+    "note": "Seeded from the Reconciliation document.",
+    "accepted": "2026-10-01"
+  },
+  {
+    "id": "L-c16786c9",
+    "kind": "seed:action_repeats",
+    "step": 5,
+    "title": "One corporate action per declaration",
+    "detail": "375 headlines (141 dividend) were counted as separate actions.",
+    "evidence": [],
+    "suggested_change": "Collapse repeat headlines by type + figures within a window.",
+    "golden": null,
+    "status": "accepted",
+    "source_run": "Reconciliation 1-Oct-2026 s5-s7",
+    "created": "2026-10-01",
+    "tests_ref": [
+      "tests/test_reconciliation.py::test_corporate_action_repeat_headlines_count_once"
+    ],
+    "note": "Seeded from the Reconciliation document.",
+    "accepted": "2026-10-01"
+  },
+  {
+    "id": "L-7a44b8b2",
+    "kind": "seed:union_rescore",
+    "step": 6,
+    "title": "When two implementations differ, take the union of verified evidence and re-score once",
+    "detail": "Averaging or picking a side hides the real disagreement.",
+    "evidence": [],
+    "suggested_change": "`sentinelq merge` + portfolio/verified_events.csv; verified events reproduce the reconciled scores.",
+    "golden": null,
+    "status": "accepted",
+    "source_run": "Reconciliation 1-Oct-2026 s5-s7",
+    "created": "2026-10-01",
+    "tests_ref": [
+      "tests/test_reconciliation.py::test_merge_is_union_then_rescore_never_an_average",
+      "tests/test_reconciliation.py::test_verified_events_reproduce_the_reconciled_governance_scores"
+    ],
+    "note": "Seeded from the Reconciliation document.",
+    "accepted": "2026-10-01"
+  }
+]

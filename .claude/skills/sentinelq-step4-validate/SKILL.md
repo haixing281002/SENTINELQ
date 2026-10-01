@@ -15,3 +15,6 @@ with a logged reason - never silent, never passed through. Dropped counts appear
 **Manually verify:** `runs/<date>/dropped.jsonl` (every drop + reason), Coverage sheet of the xlsx, `RUN_RECORD.md` Step 4 table, `label_failures.jsonl` if any.
 
 **New gates:** governance items missing the verification answers fail as `incomplete_governance_verification:<field>` (retried once, then dropped with the reason); the price-language lint relabels price-only headlines.
+
+## Lessons (this step learns)
+Read `LESSONS.md` in this folder first if it exists (accepted, human-approved lessons for this step). After a run, use the `sentinelq-learn` skill: `python -m sentinelq learn propose runs/<date>`. Never apply a lesson without the person accepting it.

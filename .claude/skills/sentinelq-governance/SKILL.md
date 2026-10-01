@@ -40,3 +40,6 @@ scored and why. Full rules: `docs/GOVERNANCE.md`. Governance is searched over th
    each event with date and link, and what was *not* scored and why (routine items, out-of-window, no source).
 
 Example: Angel One - SEBI settlement 15-Jun-26 (-20) + CPO resignation (-8) = **72, Flag**.
+
+## Lessons (this step learns)
+Read `LESSONS.md` in this folder first if it exists (accepted, human-approved lessons for this step). After a run, use the `sentinelq-learn` skill: `python -m sentinelq learn propose runs/<date>`. Never apply a lesson without the person accepting it.

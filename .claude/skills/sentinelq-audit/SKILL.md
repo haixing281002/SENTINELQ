@@ -16,3 +16,6 @@ Live view while running: the display tags every line `[STEP n/6 NAME]` and shows
 Conformance with the architecture document: `docs/PIPELINE_CONFORMANCE.md`.
 
 Two runs disagree or a person verified an event: use `sentinelq-reconcile` (`merge`, `portfolio/verified_events.csv`).
+
+## Lessons (this step learns)
+Read `LESSONS.md` in this folder first if it exists (accepted, human-approved lessons for this step). After a run, use the `sentinelq-learn` skill: `python -m sentinelq learn propose runs/<date>`. Never apply a lesson without the person accepting it.

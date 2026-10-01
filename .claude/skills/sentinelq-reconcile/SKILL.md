@@ -12,3 +12,6 @@ description: Reconcile two Sentinel Q runs or add human-verified evidence - unio
   "not a point-in-time backtest". Say so when presenting such a run.
 * **Sentiment shows n/a?** That is the minimum-evidence standard (fewer than 8 relevant articles, or no results print) - report it as Insufficient Data; do not force a score.
 Rules and tests: `docs/RECONCILIATION_FIXES.md`.
+
+## Lessons (this step learns)
+Read `LESSONS.md` in this folder first if it exists (accepted, human-approved lessons for this step). After a run, use the `sentinelq-learn` skill: `python -m sentinelq learn propose runs/<date>`. Never apply a lesson without the person accepting it.

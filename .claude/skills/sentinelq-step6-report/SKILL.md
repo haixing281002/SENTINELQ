@@ -13,3 +13,6 @@ Run Info), `scores.json`, `evidence.json`, `dropped.jsonl`, `raw_model_responses
 **Rebuild the PDF without re-running anything (e.g. after you edit commentary):** edit `runs/<date>/narrative.json`, then
 `python -m sentinelq render runs/<date>`.
 **Manually verify:** `audit/RUN_RECORD.md` (readable record of Steps 1-6), `audit/manifest.json` (sha256 of every output), `verify` for the numbers.
+
+## Lessons (this step learns)
+Read `LESSONS.md` in this folder first if it exists (accepted, human-approved lessons for this step). After a run, use the `sentinelq-learn` skill: `python -m sentinelq learn propose runs/<date>`. Never apply a lesson without the person accepting it.
