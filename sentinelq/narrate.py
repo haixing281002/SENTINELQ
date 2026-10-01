@@ -72,6 +72,7 @@ def evidence_payload(s: StockScore, items: list[LabelledItem]) -> dict:
     return {
         "company": s.name, "sector": s.sector,
         "sentiment_status": s.sentiment_note or "ok", "evidence_span": f"{s.evidence_first}..{s.evidence_last}" if s.evidence_first else "none",
+        "coverage_map": s.coverage_map,
         "scores": {"sentiment": s.company_sentiment if s.company_sentiment is not None else "INSUFFICIENT DATA", "governance": int(round(s.governance_score)),
                    "governance_label": s.governance_label.upper() if s.governance_label == "Flag" else s.governance_label},
         "penalties_applied": [{"event": p["event_type"].replace("_", " "), "penalty": p["penalty"], "date": p["date"],

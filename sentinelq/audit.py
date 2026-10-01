@@ -98,6 +98,10 @@ def write_audit(out: Path, result: dict, rubric, params: dict, queries: list[dic
     md += [f"| {k} | {v} |" for k, v in params.items()]
     retr = run.get("retrieval", {})
     md += ["", f"- **Retrieval: {retr.get('mode', '?')}** - {retr.get('note', '')}", f"- Universe hash `{run.get('universe_hash', '')[:12]}` (diffed against the last confirmed run before this run started)"]
+    if run.get("stamp"):
+        g = run.get("golden") or {}
+        md += [f"- **Stamp (v2.1 B6):** {run['stamp']}", f"- Run id `{run.get('run_id', '')}` · sampler {run.get('sampler', '')} · items sent to the model {run.get('n_llm_items', '?')} · "
+               f"golden {g.get('total', 0) - g.get('failed', 0)}/{g.get('total', 0)} · published={run.get('published')}"]
     md += ["", "## Step 1 - Input", "", f"{len(scores)} stocks read (symbol, company, sector; cap/weight only for display).", "",
            "| symbol | company | sector | cap |", "|---|---|---|---|"]
     md += [f"| {s.symbol} | {s.name} | {s.sector} | {s.cap} |" for s in scores]

@@ -34,6 +34,18 @@ class RawItem:
     purpose: str = "sentiment"   # 'sentiment' (latest-N pass) or 'governance' (12-month governance-keyword pass)
     relevance: float = 0.0  # how much the article is ABOUT the company (title hit / mention count); ranking only
     parse: str = ""        # how the text was read: headline-only | full-text Nc | fetch-failed
+    # --- Upgrade v2.1: sampling window + event fields (A1 / A3). An article that represents a cluster IS the event. ---
+    window: int | None = None            # stratified window 1..4 (W1 0-30d ... W4 181-365d)
+    sample_extra: bool = False           # per-day overflow: rides as an extra source, never counted against the quota
+    pass_: str = ""                      # sentiment | results | governance | actions | verified
+    event_id: str = ""
+    event_date: str = ""                 # earliest member date
+    n_sources: int = 1
+    n_members: int = 1
+    max_tier: str = ""                   # T1..T4 (best among members)
+    confidence: float | None = None      # deterministic: min(1, 0.40 + 0.15 ln(1+n_sources)) * tier_weight
+    member_url_hashes: list = field(default_factory=list)
+    members: list = field(default_factory=list)   # other articles in the cluster: {url, source, date, headline, tier}
 
 
 @dataclass
@@ -68,7 +80,10 @@ class LabelledItem:
         d = {"symbol": self.item.symbol, "date": self.item.published,
              "headline": self.item.title, "url": self.item.url,
              "kind": self.item.kind, "purpose": self.item.purpose, "source": self.item.source,
-             "style": self.item.style, "parse": self.item.parse}
+             "style": self.item.style, "parse": self.item.parse, "window": self.item.window, "pass": self.item.pass_,
+             "event_id": self.item.event_id, "event_date": self.item.event_date, "n_sources": self.item.n_sources,
+             "n_members": self.item.n_members, "max_tier": self.item.max_tier, "confidence": self.item.confidence,
+             "member_url_hashes": self.item.member_url_hashes, "members": self.item.members}
         if self.label:
             d.update(subject=self.label.subject, occurred_at_company=self.label.occurred_at_company, action_stage=self.label.action_stage,
                      severity=self.label.severity, amount_inr_cr=self.label.amount_inr_cr, people_direction=self.label.people_direction,
@@ -116,6 +131,14 @@ class StockScore:
     evidence_last: str = ""
     evidence_span_days: int | None = None
     governance_ignored: list = field(default_factory=list)   # governance-flagged items deliberately NOT penalised, with why
+    # --- Upgrade v2.1 (A4) coverage map, printed on every scorecard row ---
+    coverage_map: str = ""                  # "W1:12 W2:5 W3:4 W4:3 · events 24 · results 4/4 · T1/T2 share 61% · conf-weighted n 15.8"
+    n_events: int = 0
+    n_results_events: int = 0
+    window_events: dict = field(default_factory=dict)
+    tier12_share: float | None = None
+    conf_weighted_n: float | None = None
+    window_dominated: bool = False          # acceptance A5.1: one window holds > 70% of the events
 
     def to_dict(self):
         return asdict(self)

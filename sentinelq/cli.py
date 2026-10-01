@@ -10,7 +10,10 @@ from .rubric import load_rubric
 def main(argv=None):
     import sys
     args = sys.argv[1:] if argv is None else list(argv)
-    if args and args[0] in ("inspect", "verify", "render", "merge", "learn"):      # manual-verification tools (see tools.py)
+    if args and args[0] == "run":                 # `python -m sentinelq run ...` (Upgrade v2.1 B4) is the normal weekly run
+        args = args[1:]
+        argv = args
+    if args and args[0] in ("inspect", "verify", "render", "merge", "learn", "replay", "relabel", "backtest", "diff", "golden"):      # manual-verification tools (see tools.py)
         from .tools import main as tools_main
         raise SystemExit(tools_main(args))
     p = argparse.ArgumentParser(prog="sentinelq", description="Sentinel Q pipeline")
@@ -59,6 +62,10 @@ def main(argv=None):
     p.add_argument("--no-disk-cache", action="store_true", help="keep even the label/prose caches in memory only (nothing cached on disk)")
     p.add_argument("--fetch-text", action="store_true", help="fetch article body text (better labels than headlines)")
     p.add_argument("--work", default="work", help="dir for hand-off files (file mode)")
+    p.add_argument("--corpus-dir", default="audit", help="corpus of record (append-only tables: articles, events, verifications, scores, manifest)")
+    p.add_argument("--no-corpus", action="store_true", help="do not append this run to the corpus of record")
+    p.add_argument("--legacy-sampler", action="store_true", help="latest-N newest-first sampling (pre-v2.1) instead of the stratified windows")
+    p.add_argument("--golden-file", default=None, help="regression set (default audit/golden/governance_37.jsonl); failing it stamps published=false")
     a = p.parse_args(argv)
     if a.max_articles == 0:
         a.max_articles = None
@@ -145,7 +152,8 @@ def main(argv=None):
                     verified_events=None if a.no_verified_events else a.verified_events, universe_hash=uhash,
                     governance_pass=not a.no_governance_pass, governance_cap=a.governance_cap,
                     fundamentals_pass=not a.no_fundamentals_pass, fundamentals_cap=a.fundamentals_cap,
-                    disk_cache=not a.no_disk_cache)
+                    disk_cache=not a.no_disk_cache, stratified=not a.legacy_sampler, corpus_dir=None if a.no_corpus else a.corpus_dir,
+                    news_choice=a.news, golden_file=a.golden_file)
     ingested = None
     if a.classifier == "file":
         ingested = pipe.ingest(holdings)

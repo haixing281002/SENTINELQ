@@ -24,13 +24,24 @@ def to_integer(x: float | None) -> int | None:
     return int(math.copysign(math.floor(abs(x) + 0.5), x))
 
 
+def event_weight(li: LabelledItem, as_of: date, r: Rubric) -> float:
+    """Recency weight x event confidence (A4). An item without event fields (legacy / tests) has confidence 1."""
+    conf = li.item.confidence if li.item.confidence is not None else 1.0
+    return recency_weight(li.item.published, as_of, r) * conf
+
+
+def feeds_sentiment(li: LabelledItem) -> bool:
+    return li.item.kind == "news" and li.item.purpose == "sentiment" and li.label.event_type != "price_move"
+
+
 def weighted_sentiment(items: list[LabelledItem], as_of: date, r: Rubric) -> float | None:
-    """Recency-weighted mean of ordinal sentiments (news only)."""
+    """Confidence-weighted, recency-weighted mean of ordinal sentiments over sentiment-pass and results-pass events (A4):
+    sum(w_recency * conf * s) / sum(w_recency * conf). Price-only items never feed sentiment (Reconciliation fix 5)."""
     num = den = 0.0
     for li in items:
-        if li.item.kind != "news" or li.item.purpose != "sentiment" or li.label.event_type == "price_move":
-            continue        # price-only items never feed sentiment (Reconciliation fix 5)
-        w = recency_weight(li.item.published, as_of, r)
+        if not feeds_sentiment(li):
+            continue
+        w = event_weight(li, as_of, r)
         num += w * li.label.sentiment
         den += w
     return num / den if den else None
@@ -45,12 +56,47 @@ def evidence_standard(items: list[LabelledItem], as_of: date, r: Rubric) -> dict
     dates = sorted(li.item.published for li in rel if li.item.published)
     span = (date.fromisoformat(dates[-1]) - date.fromisoformat(dates[0])).days if dates else None
     why = ""
-    if len(rel) < c["min_relevant_articles"]:
+    event_mode = any(li.item.confidence is not None for li in rel)
+    results_ev = [li for li in rel if li.label.event_type in c["results_event_types"] or li.item.pass_ == "results"]
+    windows = {li.item.window for li in rel if li.item.window}
+    if event_mode:            # A4 minimum evidence: >= 6 events, spanning >= 2 windows, >= 1 results event
+        from .config import MIN_EVENTS, MIN_RESULTS_EVENTS, MIN_WINDOWS
+        if len(rel) < MIN_EVENTS:
+            why = f"only {len(rel)} event(s) (minimum {MIN_EVENTS})"
+        elif len(windows) < MIN_WINDOWS:
+            why = f"events fall in only {len(windows)} of the 4 windows (minimum {MIN_WINDOWS})"
+        elif len(results_ev) < MIN_RESULTS_EVENTS:
+            why = "no results event in the 12-month window"
+    elif len(rel) < c["min_relevant_articles"]:
         why = f"only {len(rel)} relevant article(s) (minimum {c['min_relevant_articles']})"
     elif c["require_results_print"] and not results:
         why = "no results / earnings / guidance item in the 12-month window"
-    return {"n": len(rel), "results": len(results), "first": dates[0] if dates else "", "last": dates[-1] if dates else "",
-            "span": span, "insufficient": why, "collapsed": span is not None and span < c["min_span_days"]}
+    return {"n": len(rel), "results": len(results_ev if event_mode else results), "first": dates[0] if dates else "", "last": dates[-1] if dates else "",
+            "span": span, "insufficient": why, "collapsed": span is not None and span < c["min_span_days"], "windows": sorted(windows),
+            "event_mode": event_mode}
+
+
+def coverage_map(items: list[LabelledItem], ev: dict) -> dict:
+    """A4 coverage map for one stock: per-window event counts, results events, T1/T2 share, confidence-weighted n, dominance."""
+    from .config import RESULTS_EVENTS_MAX, WINDOW_DOMINANCE
+    from .sampler import window_counts
+    news = [li for li in items if li.item.kind == "news"]
+    rel = [li for li in news if feeds_sentiment(li)]
+    wc = window_counts([li.item for li in rel])
+    n = len(rel)
+    t12 = sum(1 for li in news if li.item.max_tier in ("T1", "T2"))
+    share = round(t12 / len(news), 2) if news else None
+    cwn = round(sum((li.item.confidence if li.item.confidence is not None else 1.0) for li in rel), 1)
+    dominated = n >= 6 and max(wc.values() or [0]) / n > WINDOW_DOMINANCE
+    zero = [f"W{k}" for k, v in wc.items() if v == 0]
+    text = (" ".join(f"W{k}:{v}" for k, v in wc.items()) + f" · events {n} · results {ev['results']}/{RESULTS_EVENTS_MAX}"
+            + (f" · T1/T2 share {share:.0%}" if share is not None else "") + f" · conf-weighted n {cwn}")
+    if zero:
+        text += " · no events in " + ", ".join(zero)
+    if dominated:
+        text += f" · W{max(wc, key=wc.get)} dominates ({max(wc.values()) / n:.0%} of events)"
+    return {"text": text, "windows": wc, "n_events": n, "n_results": ev["results"], "tier12_share": share, "conf_weighted_n": cwn,
+            "dominated": dominated}
 
 
 def _penalty(pen, lab):
@@ -120,7 +166,8 @@ def same_event(a: LabelledItem, b: LabelledItem, own_tokens: set[str], days: int
         return (_tokens(li.item.title) | _tokens((li.label.event_key or "").replace("-", " "))) - own_tokens - _STOP
     wa, wb = words(a), words(b)
     shared = wa & wb
-    return len(shared) >= 2 and len(shared) / max(min(len(wa), len(wb)), 1) >= 0.5
+    gap = abs((date.fromisoformat(a.item.published) - date.fromisoformat(b.item.published)).days)
+    return len(shared) >= 2 and (len(shared) / max(min(len(wa), len(wb)), 1) >= 0.5 or gap <= 3)   # notice day 1 / probe day 2-3 = one event
 
 
 _FAMILY = {"regulatory_action": "regulatory", "investigation": "regulatory", "exchange_fine": "regulatory", "litigation": "regulatory",
@@ -143,6 +190,10 @@ def gate(li: LabelledItem, r: Rubric) -> tuple[float | None, str, str]:
         return float(it.penalty_override), f"human-set weight ({it.verified or 'verified'}; {it.source_ref or 'see evidence'})", "override"
     if base is None:
         return None, g.get("routine_types", {}).get(lab.event_type, "no penalty for this type"), "routine"
+    from .config import CONF_UNPENALISED_BELOW
+    if it.confidence is not None and it.confidence < CONF_UNPENALISED_BELOW and it.max_tier not in ("T1", "T2"):
+        return None, (f"confidence {it.confidence:.2f} < {CONF_UNPENALISED_BELOW} with no T1/T2 source ({it.n_sources} source(s), best tier "
+                      f"{it.max_tier or 'T3'}) - listed, not penalised"), "confidence"
     text = f"{it.title}. {lab.rationale}"
     # 1. subject: the company must be the subject (not victim / lender / peer / sector / macro / shareholders)
     if lab.subject and lab.subject not in c["subject_ok"]:
@@ -181,7 +232,8 @@ def gate(li: LabelledItem, r: Rubric) -> tuple[float | None, str, str]:
         if cap is not None:
             p = max(p, cap)
             basis += f"; severity {lab.severity} caps at {cap:+g}"
-        if lab.severity != "integrity" and lab.amount_inr_cr is not None and lab.amount_inr_cr < c["materiality_floor_cr"]:
+        exempt = c.get("floor_exempt_severities", ["integrity", "minor"])   # a stated 'minor' is the labeller's judgement that it is more than procedural
+        if lab.severity not in exempt and lab.amount_inr_cr is not None and lab.amount_inr_cr < c["materiality_floor_cr"]:
             p = max(p, c["procedural_band_penalty"])
             basis += f"; Rs {lab.amount_inr_cr:g} cr is under the Rs {c['materiality_floor_cr']:g} cr floor -> procedural band {c['procedural_band_penalty']:+g}"
     return p, basis, "penalty"
@@ -239,7 +291,11 @@ def governance(items: list[LabelledItem], r: Rubric, company_name: str = "") -> 
         seen_types.add(et)
         score += p
         applied.append({"event_type": et, "penalty": p, "date": li.item.published, "headline": li.item.title, "url": li.item.url,
-                        "source_ref": li.item.source_ref, "verified": li.item.verified, "basis": why})
+                        "source_ref": li.item.source_ref, "verified": li.item.verified, "basis": why, "event_id": li.item.event_id,
+                        "verification": {"subject_is_company": li.label.subject in (None, "company", "subsidiary", "promoter_or_insider"),
+                                         "event_at_company": li.label.occurred_at_company, "direction": li.label.people_direction,
+                                         "severity": li.label.severity, "stage": li.label.action_stage, "amount_inr_cr": li.label.amount_inr_cr},
+                        "n_sources": li.item.n_sources, "max_tier": li.item.max_tier, "confidence": li.item.confidence})
 
     # memory discount: only when nothing in the window was penalised (Reconciliation fix 3)
     memory = [li for li in historical if li.label.event_type not in {a["event_type"] for a in applied}]
@@ -305,6 +361,7 @@ def score_portfolio(holdings: list[Holding], by_symbol: dict[str, list[LabelledI
         if ev["collapsed"] and not ev["insufficient"]:
             note = f"EVIDENCE WINDOW COLLAPSED: articles span only {ev['span']} days ({ev['first']}..{ev['last']}) of the 12-month lookback"
         low = low or bool(ev["insufficient"]) or ev["collapsed"]
+        cm = coverage_map(items, ev)
         rat = (f"Governance = {r['governance']['start']} with penalties [{pen_txt}] = {g_score:g} ({g_label}). "
                f"Sentiment from {ev['n']} relevant news item(s), half-life {r['sentiment']['half_life_trading_days']} trading days."
                + (f" {note}." if note else "") + (" LOW CONFIDENCE." if low else ""))
@@ -315,7 +372,9 @@ def score_portfolio(holdings: list[Holding], by_symbol: dict[str, list[LabelledI
             governance_score=g_score, governance_label=g_label, governance_penalties=pens, corporate_action_score=round(ca_score, 2),
             corporate_action_detail=ca_detail, n_items=len(items), n_dropped=dropped_counts.get(h.symbol, 0), low_confidence=low,
             rationale=rat, cap=h.cap, weight=h.weight, sentiment_note=note, relevant_articles=ev["n"], evidence_first=ev["first"],
-            evidence_last=ev["last"], evidence_span_days=ev["span"], governance_ignored=g_ignored))
+            evidence_last=ev["last"], evidence_span_days=ev["span"], governance_ignored=g_ignored,
+            coverage_map=cm["text"], n_events=cm["n_events"], n_results_events=cm["n_results"], window_events=cm["windows"],
+            tier12_share=cm["tier12_share"], conf_weighted_n=cm["conf_weighted_n"], window_dominated=cm["dominated"]))
     return out
 
 

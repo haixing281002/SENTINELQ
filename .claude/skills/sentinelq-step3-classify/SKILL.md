@@ -23,3 +23,6 @@ changes are `management_change_routine` (no penalty). See `docs/GOVERNANCE.md`.
 
 ## Lessons (this step learns)
 Read `LESSONS.md` in this folder first if it exists (accepted, human-approved lessons for this step). After a run, use the `sentinelq-learn` skill: `python -m sentinelq learn propose runs/<date>`. Never apply a lesson without the person accepting it.
+
+## v2.1: one call per event
+Only the cluster representative (highest tier, first report) is labelled; the label applies to the whole cluster. Same `url_hash` + prompt + model seen in the corpus of record -> stored label, no call (B2). Post-label merge: same type + same flag within 3 days = one event.

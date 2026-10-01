@@ -23,6 +23,9 @@ from .narrate import TemplateNarrator, portfolio_facts
 from .progress import Display
 from .style import classify_style
 from .ingest.select import count_usable, month_spark, name_tokens, select_articles, select_fundamentals, select_governance
+from .sampler import stratified_sample
+from .cluster import alias_tokens, attach_extras, build_event, post_label_merge, precluster, top_frequency, url_hash
+from .config import RESULTS_EVENTS_MAX
 from .pdf import build_pdf
 from .report import write_reports
 from .rubric import Rubric
@@ -83,6 +86,16 @@ THROTTLE_HELP = (
 )
 
 
+def _label_from_event_row(row: dict) -> dict:
+    gate = row.get("gate_json")
+    gate = json.loads(gate) if isinstance(gate, str) and gate else (gate or {})
+    d = {"event_type": row["event_type"], "sentiment": int(row["sentiment"]), "rationale": row.get("justification") or "",
+         "governance_flag": bool(row.get("is_governance_flag")), "about_company": True, "materiality": row.get("materiality"),
+         "historical": bool(row.get("historical"))}
+    d.update({k: v for k, v in gate.items() if v is not None})
+    return d
+
+
 class Pipeline:
     def __init__(self, rubric: Rubric, news, actions, prices, classifier: Classifier,
                  out_dir: str | Path, cache_path: str | Path = ".cache/labels.jsonl",
@@ -94,7 +107,8 @@ class Pipeline:
                  allow_missing_news: bool = False, ingest_retry_wait: float = 60.0, prefilter: bool = True,
                  disk_cache: bool = True, governance_pass: bool = True, governance_cap: int = 30,
                  fundamentals_pass: bool = True, fundamentals_cap: int = 40, retrieval_mode: str = "live", run_date: date | None = None,
-                 verified_events: str | Path | None = None, universe_hash: str = ""):
+                 verified_events: str | Path | None = None, universe_hash: str = "", stratified: bool = True,
+                 corpus_dir: str | Path | None = None, news_choice: str = "", golden_file: str | Path | None = None):
         self.r, self.news, self.actions, self.prices, self.clf = rubric, news, actions, prices, classifier
         self.out = Path(out_dir)
         self.cache = LabelCache(cache_path if disk_cache else None)   # label cache holds hash -> label only, no article text
@@ -113,6 +127,25 @@ class Pipeline:
         if hasattr(self.news, "on_event"):
             self.news.on_event = lambda m: self.ui.note("  " + m, "y")
         self._key = lambda i: item_key(i.url, i.title, i.snippet, self.clf.model_id, PROMPT_VERSION)
+        # ---- Upgrade v2.1: stratified sampler + event clustering (A1/A3) and the corpus of record (B1-B3)
+        self.stratified, self.news_choice, self.golden_file = stratified, news_choice, golden_file
+        self.started = datetime.now()
+        self._sample_reports: dict[str, dict] = {}
+        self._extras: dict[str, list] = {}
+        self._articles_seen: dict[str, list[dict]] = {}
+        self._sample_drops: dict[str, list] = {}
+        self._merges: list[dict] = []
+        self._cluster_drops: list[dict] = []
+        self.llm_items = 0                       # items actually sent to the model this run (A5.6 / B7.5)
+        self.corpus = None
+        self._corpus_idx: dict = {}
+        if corpus_dir:
+            from .corpus import Corpus
+            self.corpus = Corpus(corpus_dir)
+            try:
+                self._corpus_idx = self.corpus.label_index(PROMPT_VERSION, self.clf.model_id)
+            except Exception as e:               # a damaged table must not stop a run; it is reported
+                self.ui.note(f"  corpus label index unavailable ({e!r}); labels will be fetched again", "y")
 
     # ---- scraping (Stage 2) --------------------------------------------------------------------------------
     def _fetch_stock(self, h):
@@ -120,7 +153,7 @@ class Pipeline:
         items, errs = [], []
         toks = name_tokens(h)
         if hasattr(self.news, "stop_when"):   # roll the window back only until we hold enough usable, latest articles
-            self.news.stop_when = (lambda its: count_usable(its, toks) >= self.max_articles) if self.max_articles else None
+            self.news.stop_when = None if self.stratified else ((lambda its: count_usable(its, toks) >= self.max_articles) if self.max_articles else None)
         for prov, days in ((self.news, w["news_days"]), (self.actions, w["actions_days"])):
             if prov is None:
                 continue
@@ -129,20 +162,95 @@ class Pipeline:
             except Exception as e:  # a provider failure must be visible, not fatal
                 errs.append({"symbol": h.symbol, "provider": type(prov).__name__, "error": repr(e)})
         found = len([i for i in items if i.kind == "news"])
-        items = select_articles(items, self.max_articles, toks)      # the LATEST max_articles usable ones (sentiment pass)
+        if self.stratified:                                           # A1: fixed windows W1..W4 with quotas, per-day cap, carry-forward
+            news_all = [i for i in items if i.kind == "news"]
+            acts = [i for i in items if i.kind != "news"]
+            for a in acts:
+                a.pass_ = "actions"
+            selected, extras, rep = stratified_sample(news_all, self.as_of, toks)
+            for i in selected + extras:
+                i.pass_, i.purpose = "sentiment", "sentiment"
+            self._sample_reports[h.symbol], self._extras[h.symbol] = rep, extras
+            chosen = {id(i) for i in selected} | {id(i) for i in extras}
+            seen_rows, sdrops = [], []
+            for i in news_all:
+                why = "" if id(i) in chosen else ("syndicated_duplicate" if any(m["url"] == i.url for sel in selected + extras for m in sel.members)
+                                                  else "title_does_not_name_company" if not any(t in (i.title or "").lower() for t in toks)
+                                                  else "outside_lookback" if i.window is None else "over_budget")
+                seen_rows.append(self._article_row(i, why))
+                if why and why != "syndicated_duplicate":
+                    sdrops.append(Dropped(h.symbol, i.title, i.url, i.published, "sample", why))
+            self._articles_seen[h.symbol], self._sample_drops[h.symbol] = seen_rows, sdrops
+            items = selected + acts
+        else:
+            items = select_articles(items, self.max_articles, toks)      # legacy: the LATEST max_articles usable ones (sentiment pass)
         if self.fundamentals_pass and hasattr(self.news, "fetch_fundamentals") and not errs:
             try:    # sentiment must rest on the whole lookback incl. results prints, not only the latest weeks (Reconciliation cause 1)
                 fund = self.news.fetch_fundamentals(h, self.as_of - timedelta(days=w["news_days"]), self.as_of)
-                items += select_fundamentals(fund, items, 10, self.fundamentals_cap, toks, self.as_of)
+                picked = select_fundamentals(fund, items, 10, self.fundamentals_cap, toks, self.as_of)
+                if self.stratified:                                   # mandatory anchors, outside the budget (A1)
+                    from .sampler import window_of
+                    for i in picked:
+                        i.pass_, i.window = "results", window_of(i.published, self.as_of)
+                    self._articles_seen.setdefault(h.symbol, []).extend(self._article_row(i, "") for i in picked)
+                items += picked
             except Exception as e:
                 errs.append({"symbol": h.symbol, "provider": type(self.news).__name__ + ".fundamentals", "error": repr(e)})
         if self.governance_pass and hasattr(self.news, "fetch_governance") and not errs:
             try:    # governance is a 12-month rubric: search the whole year for governance events, independent of the latest-N pull
                 gov = self.news.fetch_governance(h, self.as_of - timedelta(days=w["news_days"]), self.as_of)
-                items += select_governance(gov, items, self.governance_cap, toks)
+                picked = select_governance(gov, items, self.governance_cap, toks)
+                if self.stratified:
+                    from .sampler import window_of
+                    for i in picked:
+                        i.pass_, i.window = "governance", window_of(i.published, self.as_of)
+                    self._articles_seen.setdefault(h.symbol, []).extend(self._article_row(i, "") for i in picked)
+                items += picked
             except Exception as e:
                 errs.append({"symbol": h.symbol, "provider": type(self.news).__name__ + ".governance", "error": repr(e)})
         return items, found, errs
+
+    def _article_row(self, i, dropped_reason: str) -> dict:
+        from .tiers import domain_of, tier_of
+        d = domain_of(i.url, i.source)
+        return {"symbol": i.symbol, "url": i.url, "url_hash": url_hash(i.url), "source_domain": d, "source_tier": tier_of(d),
+                "published_date": i.published, "headline": i.title, "snippet": (i.snippet or "")[:300], "pass": i.pass_ or "sentiment",
+                "window": i.window, "dropped_reason": dropped_reason or None}
+
+    def _to_events(self, h, items):
+        """A3 stage 1: cluster this stock's articles into events; label the representative only. Returns (items, dropped)."""
+        news = [i for i in items if i.kind == "news"]
+        rest = [i for i in items if i.kind != "news"]
+        extras = self._extras.get(h.symbol, [])
+        alias = alias_tokens(h.name, h.aliases, h.symbol)
+        common = top_frequency([i.title for i in news] + [x.title for x in extras], alias)
+        events, dropped = [], []
+        for members in precluster(news, alias, common):
+            passes = {m.pass_ for m in members}
+            pass_ = "sentiment" if "sentiment" in passes else "results" if "results" in passes else "governance"
+            ev = build_event(members, pass_)
+            ev.purpose = "sentiment" if pass_ in ("sentiment", "results") else "governance"
+            events.append(ev)
+        for x in attach_extras(events, extras, alias):
+            dropped.append(Dropped(h.symbol, x.title, x.url, x.published, "sample", "per_day_cap_no_same_day_cluster"))
+        # results anchors: at most RESULTS_EVENTS_MAX results events, one per quarter (the best-sourced one)
+        res = [e for e in events if e.pass_ == "results"]
+        if len(res) > 0:
+            byq: dict[str, list] = {}
+            for e in res:
+                d = e.event_date or e.published
+                byq.setdefault(f"{d[:4]}Q{(int(d[5:7]) - 1) // 3 + 1}", []).append(e)
+            keep = []
+            for q in sorted(byq, reverse=True)[:RESULTS_EVENTS_MAX]:
+                keep.append(max(byq[q], key=lambda e: (e.n_sources, e.published)))
+            for e in res:
+                if e not in keep:
+                    dropped.append(Dropped(h.symbol, e.title, e.url, e.published, "sample", "results_quota_one_event_per_quarter"))
+            events = [e for e in events if e.pass_ != "results" or e in keep]
+        n_in = len(news) + len(extras)
+        self.ui.note(f"        events: {n_in} article(s) -> {len(events)} event(s) ({sum(1 for e in events if e.n_members > 1)} multi-source); "
+                     f"only representatives are labelled", "d")
+        return events + rest, dropped
 
     def _prep(self, h, items):
         """Style + parse mode; optionally read the article body (in memory only)."""
@@ -181,6 +289,13 @@ class Pipeline:
             gv = sum(1 for i in items if i.purpose == "governance")
             if gv:
                 ui.note(f"        governance pass: {gv} candidate article(s) from the full 12 months (feed governance scoring only)", "d")
+            rep = self._sample_reports.get(h.symbol)
+            if rep:
+                ws = " ".join(f"W{k}:{rep['windows'][k]}/{rep['quota'][k]}" for k in rep["windows"])
+                back = sum(c.get("rolled_back", 0) for c in rep["carry"].values())
+                ui.note(f"        stratified sample: {ws} = {rep['selected']}/{rep['budget']} ({rep['usable']} usable titles; "
+                        f"{rep['per_day_extra']} per-day extras ride as sources; {rep['syndicated']} syndicated copies"
+                        + (f"; {back} carried back to the newest windows" if back else "") + ")", "d")
             ui.ingest_stock(idx, n, h, found, len(nn), len(items) - len(nn) - gv, Counter(i.style for i in nn), False, err_txt,
                             secs, self.max_articles, month_spark(items, self.as_of - timedelta(days=w_days), self.as_of, ui.ascii))
 
@@ -237,6 +352,108 @@ class Pipeline:
                         on_ready(h, self._prep(h, raw[h.symbol]))
         return raw, errors
 
+    def _delta(self, scores) -> list[dict]:
+        """B6 Delta: this run vs the previous stored scores/ table (the last non-replay run), never re-derived from news."""
+        if self.corpus is None:
+            return []
+        try:
+            ids = [m["run_id"] for m in self.corpus.manifests() if m.get("n_scores") and not m.get("replay")]
+            if not ids:
+                return []
+            prev = {r_["symbol"]: r_ for r_ in self.corpus.scores([ids[-1]])}
+        except Exception:
+            return []
+        out = []
+        for s in scores:
+            p = prev.get(s.symbol)
+            if not p:
+                out.append({"symbol": s.symbol, "prev_run": ids[-1], "prev_sentiment": None, "prev_governance": None, "prev_label": None,
+                            "sentiment": s.company_sentiment, "governance": s.governance_score, "label": s.governance_label, "change": "new name"})
+                continue
+            ch = []
+            if p.get("sentiment_bucket") != s.company_sentiment:
+                ch.append(f"sentiment {p.get('sentiment_bucket')} -> {s.company_sentiment}")
+            if p.get("gov_score") != s.governance_score:
+                ch.append(f"governance {p.get('gov_score')} -> {s.governance_score:g}")
+            out.append({"symbol": s.symbol, "prev_run": ids[-1], "prev_sentiment": p.get("sentiment_bucket"), "prev_governance": p.get("gov_score"),
+                        "prev_label": p.get("gov_label"), "sentiment": s.company_sentiment, "governance": s.governance_score, "label": s.governance_label,
+                        "change": "; ".join(ch) or "unchanged"})
+        return out
+
+    def _stamp(self, source_mode: str) -> str:
+        """B6 honesty stamp for the scorecard header."""
+        return (f"{source_mode} · as_of {self.as_of.isoformat()} · universe {self.universe_hash[:8] or 'n/a'} · prompt {PROMPT_VERSION} · "
+                f"rubric v{self.r.version} ({self.r.sha256[:8]}) · model_label {self.clf.model_id} · model_verify python-gate")
+
+    def _golden_gate(self) -> dict:
+        from .golden import run_golden
+        try:
+            return run_golden(self.r, self.golden_file, corpus=self.corpus)
+        except FileNotFoundError as e:
+            return {"passed": False, "total": 0, "failed": 0, "error": str(e)}
+
+    def _write_corpus(self, run_id: str, result: dict, holdings, raw) -> dict:
+        """B1: append this run's tables to the corpus of record. Headline + snippet (<= 300 chars) only; never body text."""
+        from .tiers import domain_of, tier_of
+        now = datetime.now().isoformat(timespec="seconds")
+        kept, scores, run = result["kept"], result["scores"], result["run"]
+        drop_by_hash = {url_hash(d.url): d.reason for d in result["dropped"]}
+        articles = []
+        for h in holdings:
+            rows = self._articles_seen.get(h.symbol)
+            if rows is None:                                      # legacy sampler: record what was kept
+                rows = [self._article_row(i, "") for i in raw.get(h.symbol, []) if i.kind == "news"]
+            for r_ in rows:
+                dr = r_["dropped_reason"] or drop_by_hash.get(r_["url_hash"])
+                articles.append({**r_, "run_id": run_id, "as_of": self.as_of.isoformat(), "fetched_at": now, "dropped_reason": dr})
+        events, verifs = [], []
+        for h in holdings:
+            for li in kept.get(h.symbol, []):
+                if li.item.kind != "news":
+                    continue
+                it, lab = li.item, li.label
+                gate = {k: getattr(lab, k) for k in ("subject", "occurred_at_company", "action_stage", "severity", "amount_inr_cr",
+                                                    "people_direction", "role_tier", "event_key")}
+                events.append({"event_id": it.event_id or url_hash(it.url), "symbol": it.symbol, "event_date": it.event_date or it.published,
+                               "pass": it.pass_ or ("verified" if it.verified else "sentiment"), "n_sources": it.n_sources, "n_members": it.n_members,
+                               "max_tier": it.max_tier or tier_of(domain_of(it.url, it.source)), "representative_url": it.url,
+                               "member_url_hashes": it.member_url_hashes or [url_hash(it.url)], "event_type": lab.event_type,
+                               "sentiment": lab.sentiment, "is_governance_flag": lab.governance_flag,
+                               "governance_flag_type": lab.event_type if lab.governance_flag else None, "justification": lab.rationale,
+                               "confidence": it.confidence, "window": it.window, "prompt_version": PROMPT_VERSION, "model_label": self.clf.model_id,
+                               "labelled_at": now, "run_id": run_id, "as_of": self.as_of.isoformat(), "headline": it.title,
+                               "snippet": (it.snippet or "")[:300], "url_hash": url_hash(it.url), "gate_json": gate, "materiality": lab.materiality,
+                               "historical": lab.historical, "verified": it.verified, "penalty_override": it.penalty_override,
+                               "source_ref": it.source_ref, "members_json": it.members, "purpose": it.purpose})
+        for s in scores:
+            for p in s.governance_penalties:
+                v = p.get("verification", {})
+                verifs.append({"event_id": p.get("event_id") or url_hash(p["url"]), "symbol": s.symbol, "subject_is_company": v.get("subject_is_company"),
+                               "event_at_company": v.get("event_at_company"), "direction": v.get("direction"), "severity": v.get("severity"),
+                               "applied_penalty": p["penalty"], "model_verify": "python-gate", "verified_at": now, "run_id": run_id, "basis": p.get("basis")})
+            for p in s.governance_ignored:
+                verifs.append({"event_id": url_hash(p["url"]), "symbol": s.symbol, "subject_is_company": None, "event_at_company": None, "direction": None,
+                               "severity": None, "applied_penalty": 0, "model_verify": "python-gate", "verified_at": now, "run_id": run_id,
+                               "basis": "NOT penalised: " + p["why"]})
+        srows = [{"run_id": run_id, "as_of": self.as_of.isoformat(), "symbol": s.symbol, "rubric_version": self.r.version, "rubric_sha256": self.r.sha256,
+                  "sentiment_raw": s.company_sentiment_raw, "sentiment_bucket": s.company_sentiment, "gov_score": s.governance_score,
+                  "gov_label": s.governance_label, "penalties_json": s.governance_penalties, "coverage_json": {"map": s.coverage_map, "windows": s.window_events,
+                  "n_events": s.n_events, "n_results": s.n_results_events, "tier12_share": s.tier12_share, "conf_weighted_n": s.conf_weighted_n},
+                  "insufficient": bool(s.sentiment_note.startswith("INSUFFICIENT")), "triage": s.sentiment_note, "published": run["published"],
+                  "source_mode": run["source_mode"], "prompt_version": PROMPT_VERSION, "model_label": self.clf.model_id} for s in scores]
+        manifest = {"as_of": self.as_of.isoformat(), "started_at": run["started_at"], "finished_at": now, "source_mode": run["source_mode"],
+                    "universe_hash": self.universe_hash, "universe_n": len(holdings), "prompt_version": PROMPT_VERSION, "rubric_version": self.r.version,
+                    "rubric_sha256": self.r.sha256, "model_label": self.clf.model_id, "model_verify": "python-gate", "n_articles": len(articles),
+                    "n_events": len(events), "n_llm_calls": self.llm_items, "n_llm_items": self.llm_items, "est_cost_inr": 0.0,
+                    "n_scores": len(srows), "published": run["published"], "golden": run["golden"], "sampler": run["sampler"],
+                    "warnings": ([] if run["published"] else ["golden regression set failed; scores not publishable"])
+                                + ([f"{run['totals']['label_failed']} item(s) failed to label"] if run["totals"]["label_failed"] else [])
+                                + (["backdated live index: NOT a point-in-time backtest"] if run["source_mode"] == "backdated-live-NOT-PIT" else []),
+                    "merges": self._merges, "sample_reports": self._sample_reports, "out_dir": str(self.out),
+                    "holdings": [{"symbol": h.symbol, "name": h.name, "sector": h.sector, "cap": h.cap, "weight": h.weight, "aliases": h.aliases} for h in holdings],
+                    "lint": result.get("lint", []), "dropped_counts": {s.symbol: s.n_dropped for s in scores}}
+        return self.corpus.write_run(run_id, manifest, articles, events, verifs, srows)
+
     def _prep_light(self, items):
         for i in items:
             i.style = classify_style(i)
@@ -257,6 +474,10 @@ class Pipeline:
         hit = None if bypass_cache else self.cache.get(key)
         if hit:
             return hit["label"], hit["raw"], True
+        if not bypass_cache and self._corpus_idx:               # B2: same url_hash + prompt + model -> the stored label, no model call
+            row = self._corpus_idx.get(url_hash(item.url)) or next((self._corpus_idx[hh] for hh in item.member_url_hashes if hh in self._corpus_idx), None)
+            if row:
+                return _label_from_event_row(row), "corpus:" + str(row.get("run_id", "")), True
         label, raw = self.clf.classify(item, company)
         if label is not None:
             self.cache.put(key, label, raw)
@@ -294,8 +515,14 @@ class Pipeline:
                 else:
                     keep.append(i)
             items = keep
+        if self.stratified:
+            dropped += self._sample_drops.get(h.symbol, [])
+            items, cdrops = self._to_events(h, items)
+            dropped += cdrops
         need = [(i, h.name) for i in items if i.prelabel is None and i.url.strip()]
-        todo = [(i, c) for i, c in need if not self.cache.get(self._key(i))]
+        todo = [(i, c) for i, c in need if not self.cache.get(self._key(i)) and not (self._corpus_idx and (
+            url_hash(i.url) in self._corpus_idx or any(hh in self._corpus_idx for hh in i.member_url_hashes)))]
+        self.llm_items += len(todo)
         ui.label_start(len(todo), len(need) - len(todo), Counter(i.symbol for i, _ in todo), h.symbol)
         sequential = not hasattr(self.clf, "prefetch")
         if not sequential:
@@ -329,6 +556,11 @@ class Pipeline:
                 li.label.rationale = "Price-language lint: headline is only about the share price - excluded from sentiment."
             kept.append(li)
             ev[li.label.event_type] += 1
+        if self.stratified:                      # A3 stage 3: post-label merge (same type, same flag, within 3 days = one event)
+            kept, merged = post_label_merge(kept)
+            for keep_, drop_ in merged:
+                self._merges.append({"symbol": h.symbol, "kept": keep_.item.title, "kept_date": keep_.item.published, "merged": drop_.item.title,
+                                     "merged_date": drop_.item.published, "event_type": keep_.label.event_type, "event_id": keep_.item.event_id})
         ui.stock_validated(h, len(kept), len(items), Counter(d.reason.split(":")[0] for d in dropped), ev, None)
         for it in items:                      # the article text has served its purpose: release it
             it.snippet = ""
@@ -422,7 +654,15 @@ class Pipeline:
                      "span_days": next(s.evidence_span_days for s in scores if s.symbol == h.symbol),
                      "sentiment_status": next((s.sentiment_note or "ok") for s in scores if s.symbol == h.symbol)}
                     for h in holdings]
+        from .corpus import make_run_id, source_mode_from_retrieval
+        run_id = make_run_id(self.as_of, self.started)
+        source_mode = source_mode_from_retrieval(self.retrieval_mode, self.news_choice or {"GoogleNewsRSS": "gnews", "GdeltNews": "gdelt"}.get(type(self.news).__name__, "file"))
+        golden = self._golden_gate()
         run = {"as_of": self.as_of.isoformat(), "generated_at": datetime.now().isoformat(timespec="seconds"),
+               "run_id": run_id, "source_mode": source_mode, "started_at": self.started.isoformat(timespec="seconds"),
+               "sampler": "stratified-v2.1" if self.stratified else "latest-N", "n_llm_items": self.llm_items,
+               "golden": golden, "published": bool(golden.get("passed")),
+               "stamp": self._stamp(source_mode),
                "sentinelq_version": __version__, "rubric_version": self.r.version,
                "rubric_sha256": self.r.sha256, "classifier_model": self.clf.model_id,
                "prompt_version": PROMPT_VERSION, "mode": self.mode,
@@ -435,7 +675,7 @@ class Pipeline:
                "totals": {"label_failed": len(failed), "retrieved": sum(len(v) for v in raw.values()),
                           "kept": sum(len(v) for v in kept.values()), "dropped": len(dropped)}}
         result = dict(run=run, scores=scores, kept=kept, dropped=dropped, coverage=coverage,
-                      price_context=ctx, relative=rel, ingest_errors=ingest_errors, raw_log=raw_log)
+                      price_context=ctx, relative=rel, ingest_errors=ingest_errors, raw_log=raw_log, delta=self._delta(scores))
         ui.stage("Report", "workbook, commentary per stock, portfolio observations, PDF")
         write_reports(self.out, result, self.r)
         narr, done_n, lint = {}, 0, []
@@ -461,6 +701,14 @@ class Pipeline:
         from .audit import write_audit
         write_audit(self.out, result, self.r, self._params(), list(getattr(self.news, "audit", [])))
         ui.note("[STEP 6/6 REPORT] audit record written: " + str(self.out / "audit" / "RUN_RECORD.md"), "g")
+        if self.corpus is not None:
+            try:
+                paths = self._write_corpus(run_id, result, holdings, raw)
+                ui.note(f"[STEP 6/6 REPORT] corpus of record appended: run {run_id} -> {paths['manifest']}", "g")
+            except Exception as e:
+                ui.note(f"WARNING: corpus tables not written ({e!r}); the run outputs above are complete", "y")
+        if not run["published"]:
+            ui.note(f"WARNING: golden regression set FAILED ({golden.get('failed')} of {golden.get('total')}); scores are stamped published=false", "r")
         t = run["totals"]
         ui.finish({"retrieved": t["retrieved"], "kept": t["kept"], "dropped": t["dropped"],
                    "label failures": t["label_failed"], "stocks": len(scores),

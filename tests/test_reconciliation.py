@@ -9,6 +9,7 @@ import pytest
 from sentinelq.classify import KeywordClassifier
 from sentinelq.ingest.files import FileNews
 from sentinelq.models import Holding, Label, LabelledItem, RawItem
+import functools
 from sentinelq.pipeline import Pipeline
 from sentinelq.rubric import load_rubric
 from sentinelq.score import evidence_standard, governance
@@ -16,6 +17,8 @@ from sentinelq.score import evidence_standard, governance
 ROOT = Path(__file__).resolve().parent.parent
 R = load_rubric()
 _n = [0]
+
+LegacyPipeline = functools.partial(Pipeline, stratified=False)   # the latest-N sampler kept for comparison
 
 
 def gi(event_type, title, when="2026-05-01", flag=True, sent=-1, hist=False, **gate):
@@ -215,7 +218,7 @@ def test_pipeline_reports_n_a_not_plus_one(tmp_path):
         def fetch(self, h, s, e):
             return [RawItem(h.symbol, "news", f"Polycab India update {k}", "", f"https://x.com/{k}", "2026-06-2%d" % k, "x.com") for k in range(3)]
     r = load_rubric(overrides={"sentiment": {"min_relevant_articles": 8, "require_results_print": True}})
-    res = Pipeline(r, News(), None, None, KeywordClassifier(), tmp_path / "o", tmp_path / "c.jsonl", date(2026, 7, 3), governance_pass=False,
+    res = LegacyPipeline(r, News(), None, None, KeywordClassifier(), tmp_path / "o", tmp_path / "c.jsonl", date(2026, 7, 3), governance_pass=False,
                    fundamentals_pass=False).run([Holding("POLYCAB", "Polycab India", "Consumption")])
     s = res["scores"][0]
     assert s.company_sentiment is None and "INSUFFICIENT DATA" in s.sentiment_note and s.low_confidence
@@ -301,7 +304,7 @@ def test_merge_is_union_then_rescore_never_an_average(tmp_path, capsys):
     cpo = RawItem("ANGELONE", "news", "Angel One Chief Product Officer resigns", "", "https://x.com/cpo", "2026-07-02", "x.com")
     sebi = RawItem("ANGELONE", "news", "SEBI settlement order: Angel One pays Rs 4.28cr", "", "https://x.com/sebi", "2026-06-15", "x.com")
     for name, items in (("a", [sebi]), ("b", [cpo, sebi])):
-        Pipeline(r, mk(items), None, None, KeywordClassifier(), tmp_path / name, tmp_path / f"c{name}.jsonl", date(2026, 7, 3),
+        LegacyPipeline(r, mk(items), None, None, KeywordClassifier(), tmp_path / name, tmp_path / f"c{name}.jsonl", date(2026, 7, 3),
                  governance_pass=False, fundamentals_pass=False).run(base)
     assert tools.main(["merge", str(tmp_path / "a"), str(tmp_path / "b"), "--out", str(tmp_path / "m"), "--verified", str(tmp_path / "none.csv")]) == 0
     sa = json.loads((tmp_path / "a" / "scores.json").read_text())[0]["governance_score"]
@@ -338,7 +341,7 @@ def test_fundamentals_pass_brings_the_full_year_results_prints_into_sentiment(tm
                     rows.append((f"Bajaj Finance market update {d} {k} - ET", f"https://news.google.com/rss/articles/u{d}{k}", d.strftime("%a, %d %b %Y 09:30:00 GMT"), "ET", "https://et.com"))
         return t0._RssResp(t0._rss(rows))
     h = Holding("BAJFINANCE", "Bajaj Finance", "BFSI")
-    run_ = lambda fp: Pipeline(R, GoogleNewsRSS(sleep=lambda s: None, opener=opener), None, None, KeywordClassifier(), tmp_path / f"o{fp}", tmp_path / f"c{fp}.jsonl",
+    run_ = lambda fp: LegacyPipeline(R, GoogleNewsRSS(sleep=lambda s: None, opener=opener), None, None, KeywordClassifier(), tmp_path / f"o{fp}", tmp_path / f"c{fp}.jsonl",
                                date(2026, 7, 3), max_articles=30, governance_pass=False, fundamentals_pass=fp).run([h])
     off, on = run_(False)["scores"][0], run_(True)["scores"][0]
     assert off.evidence_span_days is not None and off.evidence_span_days < 30                  # collapsed onto the last weeks

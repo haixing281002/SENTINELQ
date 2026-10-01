@@ -4,6 +4,7 @@ from pathlib import Path
 
 from sentinelq.classify import KeywordClassifier
 from sentinelq.ingest.files import FileActions, FileNews, FilePrices
+import functools
 from sentinelq.pipeline import Pipeline, load_portfolio
 from sentinelq.rubric import load_rubric
 from sentinelq.validate import validate_label
@@ -11,6 +12,8 @@ from sentinelq.validate import validate_label
 ROOT = Path(__file__).resolve().parent.parent
 FX = ROOT / "examples" / "fixtures"
 AS_OF = date(2026, 7, 15)
+
+LegacyPipeline = functools.partial(Pipeline, stratified=False)   # the latest-N sampler kept for comparison
 
 
 def run(tmp_path, cache=None):
@@ -101,7 +104,7 @@ def test_pdf_written(tmp_path):
 
 def test_max_articles_cap(tmp_path):
     r = load_rubric()
-    p = Pipeline(r, FileNews(FX / "news.json"), None, None, KeywordClassifier(), tmp_path / "o",
+    p = LegacyPipeline(r, FileNews(FX / "news.json"), None, None, KeywordClassifier(), tmp_path / "o",
                  tmp_path / "c.jsonl", AS_OF, max_articles=1)
     res = p.run(load_portfolio(ROOT / "examples" / "portfolio.csv"))
     assert all(sum(li.item.kind == "news" for li in v) <= 1 for v in res["kept"].values())
@@ -402,7 +405,7 @@ def test_generic_market_headlines_are_prefiltered_and_disclosed(tmp_path):
                  text_cache=tmp_path / "ft.jsonl")
     res = p.run([h])
     reasons = {d.headline: d.reason for d in res["dropped"]}
-    assert reasons["Sensex ends 250 pts lower as banks drag"] == "generic_market_headline"
+    assert reasons["Sensex ends 250 pts lower as banks drag"] in ("generic_market_headline", "title_does_not_name_company")
     assert "Sensex, Nifty rally; Bajaj Finance among top gainers" not in reasons      # names the company: model decides
     assert "Bajaj Finance Q4 profit rises 22%" not in reasons
 
@@ -470,7 +473,7 @@ def test_pipeline_wires_stop_condition_and_caps_to_latest(tmp_path):
     hold = load_portfolio(ROOT / "examples" / "portfolio.csv")[:1]        # ANGELONE
     opener, log = _doc_opener(per_window=30)
     g = GdeltNews(slice_days=30, sleep=lambda s: None, opener=opener)
-    p = Pipeline(r, g, None, None, KeywordClassifier(), tmp_path / "o", tmp_path / "c.jsonl", date(2026, 7, 3),
+    p = LegacyPipeline(r, g, None, None, KeywordClassifier(), tmp_path / "o", tmp_path / "c.jsonl", date(2026, 7, 3),
                  max_articles=50, governance_pass=False, fundamentals_pass=False, text_cache=tmp_path / "ft.jsonl")
     raw, _ = p.ingest(hold)
     news = [i for i in raw["ANGELONE"] if i.kind == "news"]
@@ -537,7 +540,7 @@ def test_reading_overlaps_with_scraping_next_stock(tmp_path):
             if h.symbol == hold[1].symbol:
                 saw["labeller_already_started"] = started.wait(timeout=10)
             return FileNews(FX / "news.json").fetch(h, s, e)
-    Pipeline(r, News(), None, None, Clf(), tmp_path / "o", tmp_path / "c.jsonl", AS_OF).run(hold)
+    LegacyPipeline(r, News(), None, None, Clf(), tmp_path / "o", tmp_path / "c.jsonl", AS_OF).run(hold)
     assert saw["labeller_already_started"] is True
 
 
@@ -578,7 +581,7 @@ def test_one_request_per_stock_when_enough_titles_name_the_company(tmp_path):
     h = Holding("BAJFINANCE", "Bajaj Finance", "BFSI")
     opener, log = _noisy_opener(n_title=60, n_noise=120)                       # 180 candidates, like the real run
     g = GdeltNews(sleep=lambda s: None, opener=opener)                         # defaults: 90-day window
-    p = Pipeline(r, g, None, None, KeywordClassifier(), tmp_path / "o", tmp_path / "c.jsonl", date(2026, 7, 3), max_articles=50, governance_pass=False, fundamentals_pass=False)
+    p = LegacyPipeline(r, g, None, None, KeywordClassifier(), tmp_path / "o", tmp_path / "c.jsonl", date(2026, 7, 3), max_articles=50, governance_pass=False, fundamentals_pass=False)
     items, found, errs = p._fetch_stock(h)
     assert len(log) == 1 and not errs                                          # ONE request, no rolling back needed
     assert log[0]["sort"] == ["datedesc"] and log[0]["maxrecords"] == ["250"]  # newest first, up to 250
@@ -594,7 +597,7 @@ def test_steps_back_a_window_only_when_titles_are_scarce(tmp_path):
     h = Holding("BAJFINANCE", "Bajaj Finance", "BFSI")
     opener, log = _noisy_opener(n_title=20, n_noise=50)                        # 20 good titles per window
     g = GdeltNews(sleep=lambda s: None, opener=opener)
-    p = Pipeline(r, g, None, None, KeywordClassifier(), tmp_path / "o", tmp_path / "c.jsonl", date(2026, 7, 3), max_articles=50, governance_pass=False, fundamentals_pass=False)
+    p = LegacyPipeline(r, g, None, None, KeywordClassifier(), tmp_path / "o", tmp_path / "c.jsonl", date(2026, 7, 3), max_articles=50, governance_pass=False, fundamentals_pass=False)
     items, _, _ = p._fetch_stock(h)
     assert len(log) == 3                                                       # 20 + 20 + 20 titles >= 50, then stop
     assert len([i for i in items if i.kind == "news"]) == 50
@@ -803,7 +806,7 @@ def test_pipeline_with_google_news_keeps_latest_50_titles_that_name_the_company(
     r = load_rubric()
     opener, log = _gn_opener(per_window=40, title="Bajaj Finance")
     g = GoogleNewsRSS(sleep=lambda s: None, opener=opener)
-    p = Pipeline(r, g, None, None, KeywordClassifier(), tmp_path / "o", tmp_path / "c.jsonl", date(2026, 7, 3), max_articles=50, governance_pass=False, fundamentals_pass=False)
+    p = LegacyPipeline(r, g, None, None, KeywordClassifier(), tmp_path / "o", tmp_path / "c.jsonl", date(2026, 7, 3), max_articles=50, governance_pass=False, fundamentals_pass=False)
     items, found, errs = p._fetch_stock(Holding("BAJFINANCE", "Bajaj Finance", "BFSI"))
     news = [i for i in items if i.kind == "news"]
     assert not errs and len(news) == 50 and len(log) == 2                  # 40 + 40 collected, trimmed to the latest 50

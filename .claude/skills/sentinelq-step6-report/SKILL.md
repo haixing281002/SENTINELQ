@@ -16,3 +16,6 @@ Run Info), `scores.json`, `evidence.json`, `dropped.jsonl`, `raw_model_responses
 
 ## Lessons (this step learns)
 Read `LESSONS.md` in this folder first if it exists (accepted, human-approved lessons for this step). After a run, use the `sentinelq-learn` skill: `python -m sentinelq learn propose runs/<date>`. Never apply a lesson without the person accepting it.
+
+## v2.1 honesty stamps
+Header stamp (source_mode · as_of · universe · prompt · rubric · model_label · model_verify), coverage map on every row, n_sources / tier / confidence on every evidence row, verification record on every penalty, `Delta` sheet from the previous stored run. A red "NOT A POINT-IN-TIME BACKTEST" banner marks a backdated live run.

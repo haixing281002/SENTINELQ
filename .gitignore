@@ -1,6 +1,10 @@
-__pycache__/
+
 *.egg-info/
-runs/
 .cache/
 .venv/
+__pycache__/
+audit/corpus/
+audit/manifest/
+audit/scores/
+runs/
 work/

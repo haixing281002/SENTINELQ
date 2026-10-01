@@ -15,3 +15,6 @@ Rules and tests: `docs/RECONCILIATION_FIXES.md`.
 
 ## Lessons (this step learns)
 Read `LESSONS.md` in this folder first if it exists (accepted, human-approved lessons for this step). After a run, use the `sentinelq-learn` skill: `python -m sentinelq learn propose runs/<date>`. Never apply a lesson without the person accepting it.
+
+## v2.1
+`python -m sentinelq diff --run A --run B` gives the reconciliation table shape (sentiment, governance, label, driver code). `replay --rubric` for what-ifs on stored events; `backtest --from --to --weekly` for genuine point-in-time replays (refuses look-ahead).

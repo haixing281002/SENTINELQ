@@ -20,3 +20,6 @@ Governance for one stock from a hand-made event list: `python scripts/score_gove
 
 ## Lessons (this step learns)
 Read `LESSONS.md` in this folder first if it exists (accepted, human-approved lessons for this step). After a run, use the `sentinelq-learn` skill: `python -m sentinelq learn propose runs/<date>`. Never apply a lesson without the person accepting it.
+
+## v2.1 event scoring
+Sentiment is confidence-weighted (`conf = min(1, 0.40 + 0.15 ln(1+n_sources)) * tier_weight`), governance penalises once per verified event, a governance event with conf < 0.4 and no T1/T2 source is listed not penalised, minimum evidence = >= 6 events over >= 2 windows with >= 1 results event. `python -m sentinelq replay --as-of DATE` rescores from stored events with no network and no model; `golden` must be 37/37 or the run is stamped published=false.

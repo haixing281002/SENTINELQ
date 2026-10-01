@@ -3,7 +3,7 @@ name = "sentinelq"
 version = "0.1.0"
 description = "Sentinel Q: caged-LLM evidence pipeline with deterministic scoring"
 requires-python = ">=3.10"
-dependencies = ["openpyxl>=3.1"]
+dependencies = ["openpyxl>=3.1", "pyarrow>=14", "pyyaml>=6"]
 
 [project.optional-dependencies]
 llm = ["anthropic>=0.40"]
@@ -14,7 +14,10 @@ dev = ["pytest", "pymupdf"]
 sentinelq = "sentinelq.cli:main"
 
 [tool.setuptools]
-packages = ["sentinelq", "sentinelq.ingest"]
+packages = ["sentinelq", "sentinelq.ingest", "sentinelq.config"]
+
+[tool.setuptools.package-data]
+"sentinelq.config" = ["*.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

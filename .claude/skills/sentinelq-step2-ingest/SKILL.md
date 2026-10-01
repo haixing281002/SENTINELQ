@@ -25,3 +25,6 @@ Google News links are redirect URLs (they open the publisher) - they cite the so
 
 ## Lessons (this step learns)
 Read `LESSONS.md` in this folder first if it exists (accepted, human-approved lessons for this step). After a run, use the `sentinelq-learn` skill: `python -m sentinelq learn propose runs/<date>`. Never apply a lesson without the person accepting it.
+
+## v2.1 stratified sampler (default)
+Fixed windows W1 0-30 d (40) / W2 31-90 (25) / W3 91-180 (20) / W4 181-365 (15), per-day cap 6, carry-forward; results and governance passes are anchors outside the budget. Articles cluster into EVENTS before labelling (`sentinelq/cluster.py`); source tiers in `sentinelq/config/source_tiers.yaml`. The run display prints `stratified sample: W1:40/40 ...` and `events: N articles -> M events` per stock. `--legacy-sampler` = the old latest-100. Details: `docs/UPGRADE_V2_1.md`.

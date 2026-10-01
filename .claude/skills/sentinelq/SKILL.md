@@ -49,3 +49,6 @@ The PDF generator (`sentinelq/pdf.py`) already does this - do not hand-write a d
 
 ## Lessons (this step learns)
 Read `LESSONS.md` in this folder first if it exists (accepted, human-approved lessons for this step). After a run, use the `sentinelq-learn` skill: `python -m sentinelq learn propose runs/<date>`. Never apply a lesson without the person accepting it.
+
+## v2.1 (Upgrade Workflow)
+Normal run: `python -m sentinelq run --portfolio <table> --as-of <date> --news auto`. It samples the year (stratified windows), scores events not articles, appends to the corpus of record and runs the golden set; the scorecard carries the honesty stamp and a coverage map per row. After a run: `golden`, `replay`, `diff` (see `docs/UPGRADE_V2_1.md`).

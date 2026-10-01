@@ -216,6 +216,36 @@ def render(a) -> int:
     return 0
 
 
+def corpus_cmd(a) -> int:
+    from . import replay as R
+    if a.cmd == "replay":
+        R.replay(date.fromisoformat(a.as_of), a.rubric, a.corpus_dir, a.out, None if a.no_verified else a.verified, a.title, a.strict)
+        return 0
+    if a.cmd == "relabel":
+        if a.classifier == "keyword":
+            from .classify import KeywordClassifier
+            clf = KeywordClassifier()
+        else:
+            from .claude_code import ClaudeCodeClassifier, preflight
+            preflight(a.model)
+            clf = ClaudeCodeClassifier(load_rubric(), a.model, log_path="work/claude_batches.jsonl")
+        R.relabel(date.fromisoformat(a.as_of), a.prompt, clf, a.corpus_dir, a.model)
+        return 0
+    if a.cmd == "backtest":
+        R.backtest(date.fromisoformat(a.start), date.fromisoformat(a.end), a.corpus_dir, a.out, a.rubric, weekly=not a.daily)
+        return 0
+    if a.cmd == "diff":
+        if len(a.run) != 2:
+            raise SystemExit("diff needs exactly two --run arguments")
+        R.diff(a.run[0], a.run[1], a.corpus_dir, a.out)
+        return 0
+    from .corpus import Corpus
+    from .golden import print_report, run_golden
+    rep = run_golden(load_rubric(a.rubric) if a.rubric else load_rubric(), a.file, Corpus(a.corpus_dir) if Path(a.corpus_dir).exists() else None)
+    print_report(rep)
+    return 0 if rep["passed"] else 1
+
+
 def learn_cmd(a) -> int:
     from . import learn as L
     if a.what == "propose":
@@ -273,6 +303,21 @@ def main(argv: list[str]) -> int:
     q.add_argument("--rubric-patch", help="JSON, deep-merged into rubric/learned_patch.json"); q.add_argument("--applied-in", default="")
     q = ln.add_parser("reject"); q.add_argument("id"); q.add_argument("--reason", required=True)
     ln.add_parser("render"); ln.add_parser("status"); ln.add_parser("seed")
+    rp = sub.add_parser("replay", help="rescore from stored events at an as-of date: no network, no LLM")
+    rp.add_argument("--as-of", required=True); rp.add_argument("--rubric"); rp.add_argument("--corpus-dir", default="audit"); rp.add_argument("--out")
+    rp.add_argument("--verified", default="portfolio/verified_events.csv"); rp.add_argument("--no-verified", action="store_true"); rp.add_argument("--title", default="Portfolio")
+    rp.add_argument("--strict", action="store_true", help="genuine point-in-time only: refuse runs fetched after as-of + 7 days")
+    rl = sub.add_parser("relabel", help="re-label stored headline+snippet; LLM only, no scraping")
+    rl.add_argument("--as-of", required=True); rl.add_argument("--prompt"); rl.add_argument("--corpus-dir", default="audit")
+    rl.add_argument("--classifier", choices=["claude-code", "keyword"], default="claude-code"); rl.add_argument("--model")
+    bt = sub.add_parser("backtest", help="pit-replay at each weekly as-of between two dates")
+    bt.add_argument("--from", dest="start", required=True); bt.add_argument("--to", dest="end", required=True); bt.add_argument("--weekly", action="store_true", default=True)
+    bt.add_argument("--daily", action="store_true"); bt.add_argument("--corpus-dir", default="audit"); bt.add_argument("--out"); bt.add_argument("--rubric")
+    df = sub.add_parser("diff", help="name-by-name score and label diff between two runs, drivers listed")
+    df.add_argument("--run", action="append", required=True, help="run dir (with scores.json) or corpus run_id; give twice: --run A --run B")
+    df.add_argument("--corpus-dir", default="audit"); df.add_argument("--out")
+    gd = sub.add_parser("golden", help="run the B5 regression set; exit non-zero on failure")
+    gd.add_argument("--file"); gd.add_argument("--corpus-dir", default="audit"); gd.add_argument("--rubric")
     mg = sub.add_parser("merge")
     mg.add_argument("run_a")
     mg.add_argument("run_b")
@@ -290,6 +335,8 @@ def main(argv: list[str]) -> int:
     a = p.parse_args(argv)
     if a.cmd == "learn":
         return learn_cmd(a)
+    if a.cmd in ("replay", "relabel", "backtest", "diff", "golden"):
+        return corpus_cmd(a)
     if a.cmd == "inspect":
         return {"input": inspect_input, "news": inspect_news, "label": inspect_label}[a.what](a)
     return {"verify": verify, "render": render, "merge": merge}[a.cmd](a)

@@ -68,3 +68,11 @@ The seven fixes from the 1-Oct-2026 Reconciliation (retrieval policy, governance
 ## Learning loop (human-approved)
 Each step skill keeps a `LESSONS.md`. After a run: `python -m sentinelq learn propose runs/<date>` (changes nothing) -> `learn review` -> `learn accept <id> --note ...` / `learn reject <id> --reason ...`.
 Accepting writes the lesson into the step's skill, generates a regression test in `tests/lessons/`, and can record a versioned patch in `rubric/learned_patch.json` (hash-covered). See `.claude/skills/sentinelq-learn/SKILL.md`.
+
+## Upgrade Workflow v2.1 (event-level evidence + corpus of record)
+`python -m sentinelq run ...` now samples the year in fixed windows (W1 0-30 d / W2 31-90 / W3 91-180 / W4 181-365 with quotas
+40/25/20/15), clusters articles into events before labelling (one model call per event), scores events with a deterministic
+source-tier confidence, appends every run to an append-only corpus under `audit/`, and runs the 37-item golden regression set
+(`python -m sentinelq golden`). Replay, relabel, backtest and diff work from the stored corpus without network or model calls:
+`replay --as-of`, `relabel --as-of --prompt`, `backtest --from --to --weekly`, `diff --run A --run B`. Details: `docs/UPGRADE_V2_1.md`.
+Install picks up the two new dependencies (`pyarrow`, `pyyaml`): `pip install -e .`

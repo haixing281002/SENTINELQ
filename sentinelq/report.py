@@ -41,36 +41,42 @@ def write_reports(out: Path, res: dict, rubric) -> None:
     # Scorecard
     heads = ["Symbol", "Company", "Cap", "Sector", "Weight", "Sentiment (-2..+2)", "Sentiment (unrounded)", "Sector Sentiment (raw)",
              "Governance Score", "Governance Label", "Corporate Action Score", "Items", "Dropped",
-             "Low Confidence", "Rationale"]
+             "Low Confidence", "Rationale", "Events", "Results events", "Coverage map (W1..W4 · events · results · T1/T2 share · conf-weighted n)"]
     rows = [[s.symbol, s.name, s.cap, s.sector, s.weight, s.company_sentiment, s.company_sentiment_raw, s.sector_sentiment, s.governance_score,
              s.governance_label, s.corporate_action_score, s.n_items, s.n_dropped,
-             "YES" if s.low_confidence else "", s.rationale] for s in scores]
-    ws = _sheet(wb, "Scorecard", heads, rows, widths={"Company": 26, "Rationale": 90})
+             "YES" if s.low_confidence else "", s.rationale, s.n_events, s.n_results_events, s.coverage_map] for s in scores]
+    ws = _sheet(wb, "Scorecard", heads, rows, widths={"Company": 26, "Rationale": 90, heads[-1]: 70})
     for row in ws.iter_rows(min_row=2):
         row[9].fill = PatternFill("solid", fgColor=FILLS.get(row[9].value, "FFFFFF"))
         row[14].alignment = Alignment(wrap_text=True, vertical="top")
 
     ev_head = ["Symbol", "Date", "Headline", "Event Type", "Sentiment", "Governance Flag",
-               "Rationale", "Source URL"]
-    W = {"Headline": 70, "Rationale": 70, "Source URL": 50, "Event Type": 20}
+               "Rationale", "Source URL", "Pass", "Window", "n_sources", "n_members", "max_tier", "Confidence", "Event id", "Other sources"]
+    W = {"Headline": 70, "Rationale": 70, "Source URL": 50, "Event Type": 20, "Other sources": 60}
 
     def ev(li):
-        l = li.label
-        return [li.item.symbol, li.item.published, li.item.title, l.event_type, l.sentiment,
-                "Y" if l.governance_flag else "", l.rationale, li.item.url]
+        l, it = li.label, li.item
+        return [it.symbol, it.published, it.title, l.event_type, l.sentiment,
+                "Y" if l.governance_flag else "", l.rationale, it.url, it.pass_, it.window, it.n_sources, it.n_members, it.max_tier, it.confidence,
+                it.event_id, "; ".join(f"{m.get('source', '')} {m.get('date', '')}" for m in it.members[:12])]
 
     news = [li for v in kept.values() for li in v if li.item.kind == "news" and li.item.purpose == "sentiment"]
     acts = [li for v in kept.values() for li in v if li.item.kind == "action"]
     news.sort(key=lambda x: (x.item.symbol, x.item.published), reverse=False)
     _sheet(wb, "Evidence - Sentiment", ev_head, [ev(x) for x in news], link_col=7, widths=W)
 
+    def vrec(p):
+        v = p.get("verification") or {}
+        return (f"subject_is_company={v.get('subject_is_company')}; event_at_company={v.get('event_at_company')}; direction={v.get('direction')}; "
+                f"severity={v.get('severity')}; stage={v.get('stage')}; amount_cr={v.get('amount_inr_cr')}") if v else ""
     gov = [[s.symbol, p["date"], p["headline"], p["event_type"], p["penalty"],
-            "scored - " + p.get("basis", "") + (f" [{p['verified']}]" if p.get("verified") else ""), p["url"] or p.get("source_ref", "")]
+            "scored - " + p.get("basis", "") + (f" [{p['verified']}]" if p.get("verified") else ""), p["url"] or p.get("source_ref", ""),
+            vrec(p), p.get("n_sources"), p.get("max_tier"), p.get("confidence")]
            for s in scores for p in s.governance_penalties]
-    gov += [[s.symbol, p["date"], p["headline"], p["event_type"], 0, "NOT scored: " + p["why"], p["url"] or p.get("source_ref", "")]
+    gov += [[s.symbol, p["date"], p["headline"], p["event_type"], 0, "NOT scored: " + p["why"], p["url"] or p.get("source_ref", ""), "", "", "", ""]
             for s in scores for p in s.governance_ignored]
-    _sheet(wb, "Evidence - Governance", ["Symbol", "Date", "Headline", "Event Type", "Penalty", "Treatment", "Source URL"],
-           gov, link_col=6, widths={**W, "Treatment": 55})
+    _sheet(wb, "Evidence - Governance", ["Symbol", "Date", "Headline", "Event Type", "Penalty", "Treatment", "Source URL", "Verification record",
+                                         "n_sources", "max_tier", "Confidence"], gov, link_col=6, widths={**W, "Treatment": 55, "Verification record": 70})
 
     ca = [[s.symbol, d["date"], d["headline"], d["event_type"], d["materiality"], d["contribution"], d["url"]]
           for s in scores for d in s.corporate_action_detail]
@@ -78,14 +84,16 @@ def write_reports(out: Path, res: dict, rubric) -> None:
            ["Symbol", "Date", "Headline", "Event Type", "Materiality", "Contribution", "Source URL"],
            ca, link_col=6, widths=W)
 
+    cmap = {s.symbol: s for s in scores}
     cov = [[c["symbol"], c["retrieved"], c["news_kept"], c["actions_kept"], c["kept"], c["dropped"], c["label_failed"],
-            c.get("relevant_articles", ""), c.get("span_days", ""), c.get("sentiment_status", ""), "YES" if c["low_confidence"] else ""]
+            c.get("relevant_articles", ""), c.get("span_days", ""), c.get("sentiment_status", ""), "YES" if c["low_confidence"] else "",
+            cmap[c["symbol"]].coverage_map if c["symbol"] in cmap else "", "YES" if c["symbol"] in cmap and cmap[c["symbol"]].window_dominated else ""]
            for c in res["coverage"]]
     t = run["totals"]
-    cov.append(["PORTFOLIO", t["retrieved"], "", "", t["kept"], t["dropped"], t["label_failed"], "", "", "", ""])
+    cov.append(["PORTFOLIO", t["retrieved"], "", "", t["kept"], t["dropped"], t["label_failed"], "", "", "", "", "", ""])
     _sheet(wb, "Coverage", ["Symbol", "Retrieved", "News Kept", "Actions Kept", "Kept", "Dropped",
-                            "Of which: model failed to label", "Relevant articles", "Evidence span (days)", "Sentiment status", "Low Confidence"], cov,
-           widths={"Sentiment status": 60})
+                            "Of which: model failed to label", "Relevant articles", "Evidence span (days)", "Sentiment status", "Low Confidence",
+                            "Coverage map", "One window dominates (>70%)"], cov, widths={"Sentiment status": 60, "Coverage map": 70})
     ws = wb["Coverage"]
     ws.append([])
     ws.append(["Dropped items (stage, reason)"])
@@ -107,8 +115,13 @@ def write_reports(out: Path, res: dict, rubric) -> None:
         keys = list(res["relative"][0])
         _sheet(wb, "Relative (z-scores)", keys, [[r[k] for k in keys] for r in res["relative"]])
 
-    _sheet(wb, "Run Info", ["Key", "Value"], [[k, json.dumps(v) if isinstance(v, dict) else v]
-                                              for k, v in run.items()])
+    delta = res.get("delta")
+    if delta:                                   # B6: computed from scores/ across the last two run_ids, never re-derived from news
+        _sheet(wb, "Delta", ["Symbol", "Prev run", "Prev sentiment", "Prev governance", "Prev label", "This sentiment", "This governance", "This label", "Change"],
+               [[d["symbol"], d["prev_run"], d["prev_sentiment"], d["prev_governance"], d["prev_label"], d["sentiment"], d["governance"], d["label"], d["change"]]
+                for d in delta], widths={"Prev run": 28, "Change": 50})
+    _sheet(wb, "Run Info", ["Key", "Value"], [[k, json.dumps(v) if isinstance(v, (dict, list)) else v]
+                                              for k, v in run.items()], widths={"Value": 120})
     wb.save(out / "sentinelq_report.xlsx")
 
     # Machine-readable outputs

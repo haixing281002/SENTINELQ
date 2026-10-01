@@ -97,12 +97,14 @@ def month_spark(items: list, start, end, ascii_only: bool = False) -> tuple[str,
 GOV_TITLE = re.compile(
     r"resign|quits?|steps? down|stepped down|terminat|appoint|elevat|promot|\bcfo\b|\bceo\b|\bmd\b|chief|company secretary|"
     r"compliance|sebi|\brbi\b|penalt|\bfine[ds]?\b|show.cause|settle|probe|investigat|raid|\bcbi\b|\bed\b|nclt|auditor|"
-    r"related.party|independent director|\bboard\b|pledge|whistle|fraud|default|forensic|exchange|order|ban(ned)?\b|suspend", re.I)
+    r"related.party|independent director|\bboard\b|pledge|whistle|fraud|default|forensic|exchange|order|ban(ned)?\b|suspend|"
+    r"demand notice|show cause|nppa|fssai|usfda|drug regulator|embezzl|postal ballot", re.I)
 
 GOV_QUERY_LEADERSHIP = ('(resigns OR resignation OR "steps down" OR quits OR appointed OR appoints OR "chief financial officer" OR CFO OR '
                         '"company secretary" OR "compliance officer" OR "chief executive" OR CEO OR "managing director" OR "chief product officer")')
 GOV_QUERY_REGULATORY = ('(SEBI OR RBI OR penalty OR fined OR fine OR "show cause" OR settlement OR probe OR investigation OR raid OR CBI OR '
-                        'NCLT OR auditor OR "related party" OR "independent director" OR pledge OR whistleblower OR fraud OR default)')
+                        'NCLT OR auditor OR "related party" OR "independent director" OR pledge OR whistleblower OR fraud OR default OR '
+                        '"demand notice" OR NPPA OR FSSAI OR embezzlement)')
 
 
 def select_governance(items: list, exclude: list, cap: int, tokens: list[str]) -> list:

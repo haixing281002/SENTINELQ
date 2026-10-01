@@ -154,6 +154,14 @@ def build_pdf(path: Path, res: dict, rubric, narr: dict, observations: list[dict
     retr = res["run"].get("retrieval") or {}
     if retr.get("mode") == "live_index_backdated":       # Reconciliation fix 1: never present a backdated live search as a backtest
         st.append(P("Retrospective run: " + retr["note"], NOTE))
+    elif retr.get("mode") == "replay":
+        st.append(P("Replay: " + retr["note"], NOTE))
+    if res["run"].get("stamp"):                            # Upgrade v2.1 B6: the honesty stamp is printed, not optional
+        stamp = res["run"]["stamp"]
+        if res["run"].get("source_mode") == "backdated-live-NOT-PIT":
+            st.append(Paragraph(f'<font color="{RED}"><b>{rl("NOT A POINT-IN-TIME BACKTEST")}</b></font>' + rl(" · " + stamp), NOTE))
+        else:
+            st.append(P("Run stamp: " + stamp + (" · published=false (golden regression set failed)" if res["run"].get("published") is False else ""), NOTE))
     st.append(PageBreak())
 
     # ============ Page 2: rubric ============
@@ -192,7 +200,7 @@ def build_pdf(path: Path, res: dict, rubric, narr: dict, observations: list[dict
             ("Gov.", 28.3, lambda s, r: P(f"{s.governance_score:g}", CELLC)),
             ("Label", 36.9, lambda s, r: P("FLAG" if s.governance_label == "Flag" else s.governance_label, CELLBC)),
             ("Key corporate action", 109.8, lambda s, r: P(r["key_corporate_action"] or "—", CELL)),
-            ("One-line read", 76.5, lambda s, r: P(r["one_line_read"], CELL))]
+            ("One-line read", 76.5, lambda s, r: P(r["one_line_read"] + (f'<br/><font color="{MUTED}" size="5.6">{rl(s.coverage_map)}</font>' if s.coverage_map else ""), CELL))]
     cols = [c for c in cols if not (c[0] == "Cap" and not has_cap) and not (c[0] == "Wt" and not has_wt)]
     scale = W / sum(c[1] for c in cols)
     li = [c[0] for c in cols].index("Label")
@@ -224,7 +232,10 @@ def build_pdf(path: Path, res: dict, rubric, narr: dict, observations: list[dict
                          f'<font color="{LABEL_TEXT[s.governance_label]}">{rl(f"Governance {s.governance_score:g} ({lab})")}</font>', SCORE)
         sent = paras(nr["sentiment_rationale"]) + (paras(nr["coverage_note"]) if nr.get("coverage_note") else [])
         gov = paras(nr["governance_rationale"])
-        head = [Paragraph(rl(s.name), ParagraphStyle("hold0", parent=HOLD, spaceBefore=0 if first else 20)), line, P("Sentiment rationale", H2)]
+        head = [Paragraph(rl(s.name), ParagraphStyle("hold0", parent=HOLD, spaceBefore=0 if first else 20)), line]
+        if s.coverage_map:
+            head.append(Paragraph(f'<font color="{MUTED}">{rl("Coverage: " + s.coverage_map)}</font>', SUBNOTE))
+        head.append(P("Sentiment rationale", H2))
         st.append(KeepTogether(head + sent[:1]))
         st += sent[1:] + [P("Governance rationale", H2A)] + gov
         first = False
