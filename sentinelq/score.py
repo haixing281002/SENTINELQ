@@ -1,6 +1,7 @@
 """Stage 5 - deterministic scoring. No AI, no prices. Pure arithmetic on validated evidence."""
 from __future__ import annotations
 import math
+import re
 import statistics
 from collections import defaultdict
 from datetime import date
@@ -27,7 +28,7 @@ def weighted_sentiment(items: list[LabelledItem], as_of: date, r: Rubric) -> flo
     """Recency-weighted mean of ordinal sentiments (news only)."""
     num = den = 0.0
     for li in items:
-        if li.item.kind != "news":
+        if li.item.kind != "news" or li.item.purpose != "sentiment":
             continue
         w = recency_weight(li.item.published, as_of, r)
         num += w * li.label.sentiment
@@ -42,6 +43,31 @@ def _penalty(pen, lab):
     return p
 
 
+_EXIT_WORDS = re.compile(r"resign|quit|steps? down|stepped down|exit|terminat|sacked|removed|ousted|abrupt|dismiss|relieved|fired", re.I)
+_BENIGN_PEOPLE = re.compile(r"elevat|promot|re-?designat|appointed as|appoints|appointment of|named (as )?(the )?head|takes? charge|"
+                            r"assum(es|ed) charge|superannuat|retire|retirement|succession|completion of (his|her|the) (term|tenure)|"
+                            r"transition|move[sd]? to|to head|new role|additional charge", re.I)
+_C_SUITE = re.compile(r"\b(ceo|cfo|cto|coo|cio|cmo|cpo|md|chief [a-z&/ ,-]{2,40} officer|chief executive|managing director|"
+                      r"company secretary|compliance officer)\b", re.I)
+
+
+def literal_rule_override(li: LabelledItem) -> str | None:
+    """Safety net behind the model: a 'management_exit' label is only a penalty if the item really is an UNPLANNED exit of
+    a CXO / CS / CFO / compliance officer. Returns the reason to NOT penalise, else None."""
+    lab = li.label
+    text = f"{li.item.title}. {lab.rationale}"
+    if lab.event_type != "management_exit":
+        return None
+    title = li.item.title
+    if _BENIGN_PEOPLE.search(title) and not _EXIT_WORDS.search(title):
+        return "elevation / appointment / planned change, not an exit"
+    if re.search(r"superannuat|retire|completion of (his|her|the) (term|tenure)", text, re.I) and not re.search(r"resign|terminat|abrupt|sudden", title, re.I):
+        return "planned retirement / superannuation, not an unplanned exit"
+    if not _C_SUITE.search(text):
+        return "below CXO / CS / CFO / compliance tier"
+    return None
+
+
 def governance(items: list[LabelledItem], r: Rubric) -> tuple[float, str, list[dict]]:
     """Start at 100; fixed penalties per event type (once per type). Background mentions of
     out-of-window events earn one flat memory discount, never double-counted with an in-window
@@ -50,9 +76,18 @@ def governance(items: list[LabelledItem], r: Rubric) -> tuple[float, str, list[d
     pen = g["penalties"]
     score, applied, seen = float(g["start"]), [], set()
     historical = []
+    ignored = governance.ignored = []      # (read by score_portfolio) items flagged but deliberately not penalised
     for li in sorted(items, key=lambda x: x.item.published):
         lab = li.label
         if not lab.governance_flag or _penalty(pen, lab) is None:
+            if lab.governance_flag and lab.event_type in g.get("routine_types", {}):
+                ignored.append({"event_type": lab.event_type, "date": li.item.published, "headline": li.item.title,
+                                "url": li.item.url, "why": g["routine_types"][lab.event_type]})
+            continue
+        why_not = literal_rule_override(li)
+        if why_not:
+            ignored.append({"event_type": lab.event_type, "date": li.item.published, "headline": li.item.title,
+                            "url": li.item.url, "why": why_not})
             continue
         if lab.historical:
             historical.append(li)
@@ -112,8 +147,9 @@ def score_portfolio(holdings: list[Holding], by_symbol: dict[str, list[LabelledI
         items = by_symbol.get(h.symbol, [])
         cs = weighted_sentiment(items, as_of, r)
         g_score, g_label, pens = governance(items, r)
+        g_ignored = list(governance.ignored)
         ca_score, ca_detail = corporate_actions(items, r)
-        n_news = sum(1 for i in items if i.item.kind == "news")
+        n_news = sum(1 for i in items if i.item.kind == "news" and i.item.purpose == "sentiment")
         low = n_news < r["confidence"]["low_below_items"]
         pen_txt = ", ".join(f"{p['event_type']} {p['penalty']:+g}" for p in pens) or "none"
         rat = (f"Governance = {r['governance']['start']} with penalties [{pen_txt}] = {g_score:g} ({g_label}). "
@@ -123,7 +159,7 @@ def score_portfolio(holdings: list[Holding], by_symbol: dict[str, list[LabelledI
                               None if cs is None else round(cs, 3),
                               None if sector_sent.get(h.sector) is None else round(sector_sent[h.sector], 2),
                               g_score, g_label, pens, round(ca_score, 2), ca_detail,
-                              len(items), dropped_counts.get(h.symbol, 0), low, rat, h.cap, h.weight))
+                              len(items), dropped_counts.get(h.symbol, 0), low, rat, h.cap, h.weight, g_ignored))
     return out
 
 

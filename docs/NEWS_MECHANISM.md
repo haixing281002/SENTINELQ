@@ -19,12 +19,12 @@ long-only backtest are not used (Sentinel Q scores with the fixed rubric).
 * same endpoint, phrase query, India edition, XML parsing and title clean-up as the original;
 * **added:** company aliases as an OR query (`"Titan Company" OR "Titan Co"`), explicit `after:`/`before:` windows so a past as-of date
   works (the original's `when:Nd` is always relative to today), and **rolling back** through 30 / 90 / 180 / 365-day windows,
-  newest first, stopping as soon as 50 articles whose title names the company are in hand;
+  newest first, stopping as soon as 100 articles whose title names the company are in hand;
 * **added:** flat 20 s waits on a rate limit (max 3), a health check before the run, and it never reads a consent/block page as "no news";
 * nothing is stored; Google News links are redirect pages, so those articles are read from headline + publisher + date only.
 
 ## Use
-`sentinelq ... --news gnews` (default) or `--news gdelt`. Both roll back newest-first to the latest 50 usable articles.
+`sentinelq ... --news gnews` (default) or `--news gdelt`. Both roll back newest-first to the latest 100 usable articles.
 
 ## Not verified (no access to Google/GDELT from the build sandbox)
 Live behaviour, and that Google honours `after:`/`before:` for this query (the code detects and reports it if it does not:

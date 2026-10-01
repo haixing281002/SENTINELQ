@@ -16,10 +16,10 @@ Never invent or hand-adjust a score. To change a score, change the rubric (and s
    append a row to `portfolio/universe.csv`, and retry. Weights are never needed (they don't affect any score); the Wt/Cap columns
    appear in the PDF only if the user supplies them in a `--portfolio` CSV.
 2. **Run** (no API key needed; uses the logged-in `claude` CLI). News rule: free sources only (never anything billed): default `--news gnews` (Google News RSS), or `--news gdelt`; roll the window back from the as-of date and stop
-   at the latest 50 articles whose title names the company (12-month max); articles are read in memory and never stored - see `docs/NEWS_MECHANISM.md`, `docs/GDELT.md`:
+   at the latest 100 articles whose title names the company (default `--max-articles 100`) plus a separate 12-month governance search (12-month max); articles are read in memory and never stored - see `docs/NEWS_MECHANISM.md`, `docs/GDELT.md`:
    ```bash
    pip install -e ".[prices]"      # first time only
-   sentinelq --pick "<names>" --max-articles 50 --fetch-text \
+   sentinelq --pick "<names>" --fetch-text \
      --title "<Title>" --coverage "<n> holdings" --as-of <YYYY-MM-DD> --out runs/<date>
    ```
    `--as-of` = the user's research date (default today). Add `--classifier file` for the hand-off mode

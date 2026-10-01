@@ -28,7 +28,7 @@ def main(argv=None):
     p.add_argument("--actions-file")
     p.add_argument("--prices", choices=["yahoo", "file", "none"], default="yahoo")
     p.add_argument("--prices-file")
-    p.add_argument("--max-articles", type=int, default=None, help="cap news items per company (newest first)")
+    p.add_argument("--max-articles", type=int, default=100, help="latest N articles per company whose title names it (default 100; 0 = all)")
     p.add_argument("--title", default="Portfolio", help="report title, e.g. 'QVM Portfolio'")
     p.add_argument("--coverage", default="", help="coverage blurb on page 1")
     p.add_argument("--narrator", choices=["claude-code", "file", "anthropic", "template"], default=None,
@@ -41,11 +41,15 @@ def main(argv=None):
     p.add_argument("--log", default="work/run.log", help="plain-text copy of the run display (tail -f it)")
     p.add_argument("--ascii", action="store_true", help="ASCII bars (#---) instead of block characters")
     p.add_argument("--allow-missing-news", action="store_true", help="continue even if news fetch failed for some stocks")
+    p.add_argument("--no-governance-pass", action="store_true", help="skip the separate 12-month governance-keyword search")
+    p.add_argument("--governance-cap", type=int, default=30, help="max governance-candidate articles per stock from the 12-month pass")
     p.add_argument("--no-prefilter", action="store_true", help="send generic market-roundup headlines to the model too")
     p.add_argument("--no-disk-cache", action="store_true", help="keep even the label/prose caches in memory only (nothing cached on disk)")
     p.add_argument("--fetch-text", action="store_true", help="fetch article body text (better labels than headlines)")
     p.add_argument("--work", default="work", help="dir for hand-off files (file mode)")
     a = p.parse_args(argv)
+    if a.max_articles == 0:
+        a.max_articles = None
 
     from .ingest.files import FileActions, FileNews, FilePrices
     r = load_rubric(a.rubric)
@@ -119,6 +123,7 @@ def main(argv=None):
                     narrator, a.title, a.coverage, a.max_articles, a.fetch_text,
                     1.01 if a.allow_partial_labels else 0.10, ui=ui,
                     allow_missing_news=a.allow_missing_news, prefilter=not a.no_prefilter,
+                    governance_pass=not a.no_governance_pass, governance_cap=a.governance_cap,
                     disk_cache=not a.no_disk_cache)
     from .resolve import enrich
     holdings = enrich(holdings, a.universe, mode="none" if a.classifier in ("keyword", "file") else "claude-code", model=a.model)

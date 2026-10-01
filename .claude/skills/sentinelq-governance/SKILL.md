@@ -23,6 +23,12 @@ Governance is arithmetic on labelled events, not judgement. Source of truth: `ru
 Start 100. Each event type is penalised **once** per stock (same story in many outlets must not stack).
 Labels: **Clean >= 95, Watch 80-94, Flag < 80**. Only events with a dated source URL count.
 
+## Penalty only for the adverse type (not look-alikes)
+`management_exit` = UNPLANNED exit of a CEO / MD / CFO / any "Chief ... Officer" / Company Secretary / Compliance Officer.
+Elevations, promotions, appointments, planned retirements and exits below CXO tier are `management_change_routine` (no penalty).
+Likewise `rpt_routine`, `investigation_closed`, `board_change_routine`, `auditor_rotation` carry no penalty. List what was *not*
+scored and why. Full rules: `docs/GOVERNANCE.md`. Governance is searched over the full 12 months, separately from the latest-N pull.
+
 ## Procedure
 1. Gather the stock's events for the 12-month window (from a Sentinel Q run's `evidence.json`, or research them with
    WebSearch/WebFetch - real dated URLs only). Label each: `event_type` from the table, `governance_flag`, `historical`

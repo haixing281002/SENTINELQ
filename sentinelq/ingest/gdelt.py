@@ -85,6 +85,24 @@ class GdeltNews:
         q = " OR ".join(f'"{n}"' for n in names)
         return (f"({q})" if len(names) > 1 else q) + " sourcelang:english"
 
+    def fetch_governance(self, h: Holding, start: date, end: date) -> list[RawItem]:
+        """12-month governance-keyword search (separate from the latest-N sentiment pull)."""
+        from .select import aliases_of
+        names = aliases_of(h)[:4]
+        company = "(" + " OR ".join(f'"{n}"' for n in names) + ")"
+        kw = ('(resigns OR resignation OR "steps down" OR quits OR SEBI OR RBI OR penalty OR fined OR "show cause" OR settlement OR probe OR '
+              'investigation OR raid OR auditor OR "related party" OR "independent director" OR pledge OR fraud OR default OR CFO OR "company secretary")')
+        items: list[RawItem] = []
+        for lo, hi in self._windows(start, end):
+            params = {"query": f"{company} {kw} sourcelang:english", "mode": "artlist", "format": "json", "maxrecords": self.max_records,
+                      "sort": "datedesc", "startdatetime": lo.strftime("%Y%m%d000000"), "enddatetime": hi.strftime("%Y%m%d235959")}
+            body = self._get(f"{API}?{urllib.parse.urlencode(params)}", f"{h.symbol} governance {lo}..{hi}")
+            for a in (json.loads(body).get("articles", []) if body.strip() else []):
+                seen = a.get("seendate", "")
+                items.append(RawItem(h.symbol, "news", a.get("title", ""), "", a.get("url", ""),
+                                     f"{seen[0:4]}-{seen[4:6]}-{seen[6:8]}" if len(seen) >= 8 else "", a.get("domain", ""), purpose="governance"))
+        return dedupe_by_url(items)
+
     def _windows(self, start: date, end: date):
         hi = end
         while hi >= start:

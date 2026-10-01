@@ -92,3 +92,33 @@ def month_spark(items: list, start, end, ascii_only: bool = False) -> tuple[str,
         span += f" ({(date.fromisoformat(dates[-1]) - date.fromisoformat(dates[0])).days + 1} days rolled back)"
     return bar, f"{months[0]}..{months[-1]}  {span}"
 
+
+
+GOV_TITLE = re.compile(
+    r"resign|quits?|steps? down|stepped down|terminat|appoint|elevat|promot|\bcfo\b|\bceo\b|\bmd\b|chief|company secretary|"
+    r"compliance|sebi|\brbi\b|penalt|\bfine[ds]?\b|show.cause|settle|probe|investigat|raid|\bcbi\b|\bed\b|nclt|auditor|"
+    r"related.party|independent director|\bboard\b|pledge|whistle|fraud|default|forensic|exchange|order|ban(ned)?\b|suspend", re.I)
+
+GOV_QUERY_LEADERSHIP = ('(resigns OR resignation OR "steps down" OR quits OR appointed OR appoints OR "chief financial officer" OR CFO OR '
+                        '"company secretary" OR "compliance officer" OR "chief executive" OR CEO OR "managing director" OR "chief product officer")')
+GOV_QUERY_REGULATORY = ('(SEBI OR RBI OR penalty OR fined OR fine OR "show cause" OR settlement OR probe OR investigation OR raid OR CBI OR '
+                        'NCLT OR auditor OR "related party" OR "independent director" OR pledge OR whistleblower OR fraud OR default)')
+
+
+def select_governance(items: list, exclude: list, cap: int, tokens: list[str]) -> list:
+    """Governance-candidate articles for the 12-month rubric: title carries a governance keyword, not already in the
+    sentiment set, newest first, capped. They feed governance scoring only - never sentiment."""
+    seen = {(i.url or "").strip().lower().rstrip("/") for i in exclude}
+    seen_t = {re.sub(r"[^a-z0-9]", "", (i.title or "").lower()) for i in exclude}
+    out = []
+    for i in sorted((x for x in items if x.kind == "news"), key=lambda x: (x.published, title_hit(x.title, tokens)), reverse=True):
+        k, kt = (i.url or "").strip().lower().rstrip("/"), re.sub(r"[^a-z0-9]", "", (i.title or "").lower())
+        if k in seen or kt in seen_t or not GOV_TITLE.search(i.title or ""):
+            continue
+        seen.add(k)
+        seen_t.add(kt)
+        i.purpose = "governance"
+        out.append(i)
+        if len(out) >= cap:
+            break
+    return out

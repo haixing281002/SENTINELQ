@@ -115,12 +115,12 @@ class GoogleNewsRSS:
     def probe(self) -> None:
         self._get(self._url("India economy when:1d"), "health check")
 
-    def _query(self, h: Holding, lo: date, hi: date) -> str:
+    def _query(self, h: Holding, lo: date, hi: date, extra: str = "") -> str:
         from .select import aliases_of
         names = aliases_of(h)[:4]
         q = " OR ".join(f'"{n}"' for n in names)
         q = f"({q})" if len(names) > 1 else q
-        return f"{q} after:{lo.isoformat()} before:{(hi + timedelta(days=1)).isoformat()}"
+        return f"{q} {extra} after:{lo.isoformat()} before:{(hi + timedelta(days=1)).isoformat()}".replace("  ", " ")
 
     def _windows(self, start: date, end: date):
         prev = 0
@@ -145,6 +145,26 @@ class GoogleNewsRSS:
             self._say(f"[GoogleNews] {h.symbol} {lo}..{hi}: {len(inside)} articles")
             if self.stop_when and self.stop_when(dedupe_by_url(items)):
                 break
+        return dedupe_by_url(items)
+
+    def fetch_governance(self, h: Holding, start: date, end: date) -> list[RawItem]:
+        """Second, independent search across the WHOLE lookback with governance keywords (leadership + regulatory), so a CXO exit
+        or regulatory order from months ago is found even when the latest-N headlines are all about something else."""
+        from .select import GOV_QUERY_LEADERSHIP, GOV_QUERY_REGULATORY
+        items: list[RawItem] = []
+        saved = self.marks
+        self.marks = (180, 365)
+        try:
+            wins = list(self._windows(start, end))
+        finally:
+            self.marks = saved
+        for extra in (GOV_QUERY_LEADERSHIP, GOV_QUERY_REGULATORY):
+            for lo, hi in wins:
+                rows = parse_feed(self._get(self._url(self._query(h, lo, hi, extra)), f"{h.symbol} governance {lo}..{hi}"))[: self.max_items]
+                for r in rows:
+                    if r["date"] and lo <= r["date"] <= hi:
+                        items.append(RawItem(h.symbol, "news", r["title"], "", r["url"], r["date"].isoformat(), r["source"], purpose="governance"))
+        self._say(f"[GoogleNews] {h.symbol} governance pass: {len(items)} candidate articles over {start}..{end}")
         return dedupe_by_url(items)
 
 

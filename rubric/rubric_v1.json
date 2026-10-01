@@ -1,5 +1,5 @@
 {
-  "version": "1.2.0",
+  "version": "1.3.0",
   "_note": "Single source of truth for every weight, penalty and taxonomy entry. Scores change only if this file changes. Values marked 'assumed' were not stated in the architecture document and should be confirmed by the committee.",
   "event_types": [
     "earnings_beat",
@@ -23,6 +23,11 @@
     "split_bonus",
     "dilution",
     "merger_acquisition",
+    "management_change_routine",
+    "rpt_routine",
+    "board_change_routine",
+    "investigation_closed",
+    "auditor_rotation",
     "other",
     "pledge"
   ],
@@ -136,6 +141,20 @@
       "management_exit": "−8",
       "board_independence": "−8",
       "historical": "−5"
+    },
+    "routine_types": {
+      "management_change_routine": "elevation, promotion, new appointment, planned retirement/succession, or an exit below CXO tier - not penalised",
+      "rpt_routine": "routine / approved / arm's-length related-party transaction - not penalised",
+      "board_change_routine": "ordinary board reconstitution or appointment with no independence gap - not penalised",
+      "investigation_closed": "probe concluded, quashed or cleared - not penalised (only a live probe is)",
+      "auditor_rotation": "scheduled auditor rotation / routine reappointment - not penalised"
+    },
+    "pass": {
+      "windows_days": [
+        180,
+        365
+      ],
+      "cap_per_stock": 30
     }
   },
   "corporate_actions": {

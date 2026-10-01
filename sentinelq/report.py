@@ -59,15 +59,17 @@ def write_reports(out: Path, res: dict, rubric) -> None:
         return [li.item.symbol, li.item.published, li.item.title, l.event_type, l.sentiment,
                 "Y" if l.governance_flag else "", l.rationale, li.item.url]
 
-    news = [li for v in kept.values() for li in v if li.item.kind == "news"]
+    news = [li for v in kept.values() for li in v if li.item.kind == "news" and li.item.purpose == "sentiment"]
     acts = [li for v in kept.values() for li in v if li.item.kind == "action"]
     news.sort(key=lambda x: (x.item.symbol, x.item.published), reverse=False)
     _sheet(wb, "Evidence - Sentiment", ev_head, [ev(x) for x in news], link_col=7, widths=W)
 
-    gov = [[s.symbol, p["date"], p["headline"], p["event_type"], p["penalty"], p["url"]]
+    gov = [[s.symbol, p["date"], p["headline"], p["event_type"], p["penalty"], "scored", p["url"]]
            for s in scores for p in s.governance_penalties]
-    _sheet(wb, "Evidence - Governance", ["Symbol", "Date", "Headline", "Event Type", "Penalty", "Source URL"],
-           gov, link_col=5, widths=W)
+    gov += [[s.symbol, p["date"], p["headline"], p["event_type"], 0, "NOT scored: " + p["why"], p["url"]]
+            for s in scores for p in s.governance_ignored]
+    _sheet(wb, "Evidence - Governance", ["Symbol", "Date", "Headline", "Event Type", "Penalty", "Treatment", "Source URL"],
+           gov, link_col=6, widths={**W, "Treatment": 55})
 
     ca = [[s.symbol, d["date"], d["headline"], d["event_type"], d["materiality"], d["contribution"], d["url"]]
           for s in scores for d in s.corporate_action_detail]

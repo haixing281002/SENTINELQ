@@ -52,4 +52,4 @@ Deliberate fixes vs the reference: rupee shown as "Rs" (the reference printed bl
 ("Lookbac/k", "Larg/e"), true minus signs.
 
 ## News retrieval
-Free sources only. `--news gnews` (default): Google News RSS, the mechanism extracted from Harshil's script (`docs/NEWS_MECHANISM.md`); `--news gdelt`: GDELT DOC API (`docs/GDELT.md`). Both roll back newest-first, stop at the latest 50 articles whose title names the company (12-month max), and keep articles in memory only - never stored.
+Free sources only. `--news gnews` (default): Google News RSS, the mechanism extracted from Harshil's script (`docs/NEWS_MECHANISM.md`); `--news gdelt`: GDELT DOC API (`docs/GDELT.md`). Both roll back newest-first, stop at the latest 100 articles whose title names the company (12-month max; set `--max-articles`), and keep articles in memory only - never stored.

@@ -27,6 +27,7 @@ class RawItem:
     # Pre-labelled structured actions (dividends/splits) skip the LLM.
     prelabel: dict | None = None
     style: str = ""        # article style (descriptive only, see style.py)
+    purpose: str = "sentiment"   # 'sentiment' (latest-N pass) or 'governance' (12-month governance-keyword pass)
     relevance: float = 0.0  # how much the article is ABOUT the company (title hit / mention count); ranking only
     parse: str = ""        # how the text was read: headline-only | full-text Nc | fetch-failed
 
@@ -91,6 +92,7 @@ class StockScore:
     rationale: str = ""
     cap: str = ""
     weight: str = ""
+    governance_ignored: list = field(default_factory=list)   # governance-flagged items deliberately NOT penalised, with why
 
     def to_dict(self):
         return asdict(self)

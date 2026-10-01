@@ -75,6 +75,8 @@ def evidence_payload(s: StockScore, items: list[LabelledItem]) -> dict:
         "penalties_applied": [{"event": p["event_type"].replace("_", " "), "penalty": p["penalty"], "date": p["date"],
                                "headline": p["headline"]} for p in s.governance_penalties],
         "governance_start": 100,
+        "not_penalised": [{"event": p["event_type"].replace("_", " "), "date": p["date"], "headline": p["headline"], "why": p["why"]}
+                          for p in s.governance_ignored],
         "low_confidence": s.low_confidence,
         "evidence": [{"date": li.item.published, "headline": li.item.title, "snippet": li.item.snippet,
                       "event": li.label.event_type.replace("_", " "), "sentiment": li.label.sentiment,

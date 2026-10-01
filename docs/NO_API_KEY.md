@@ -5,14 +5,14 @@ There are two ways. Neither needs `ANTHROPIC_API_KEY`.
 ## A. `--classifier claude-code` (default, fully automatic)
 Uses the `claude` CLI (Claude Code) you are already logged into. Install/login once: <https://claude.com/claude-code>.
 ```bash
-sentinelq --portfolio portfolio/qvm_portfolio.csv --max-articles 50 --fetch-text \
+sentinelq --portfolio portfolio/qvm_portfolio.csv --fetch-text \
   --title "QVM Portfolio" --coverage "30 holdings" --as-of 2026-07-03
 ```
 * Items are labelled 12 per call, 3 calls in parallel; every item still gets its own label, validated and cached.
 * Prose in the PDF (rationales, one-line reads, observations) is written by the same route.
 * `--model sonnet|opus|<id>` chooses the model. Note: `claude -p` has no temperature setting, so repeatability comes from
   the label cache (`.cache/labels.jsonl`): once labelled, an article is never re-labelled. Keep that file between runs.
-* Uses your Claude Code plan's usage allowance. 30 companies x 50 articles is ~1,500 items = ~125 calls.
+* Uses your Claude Code plan's usage allowance. 29 companies x (100 sentiment + up to 30 governance) = up to ~3,800 items = ~470 calls of 8.
 
 ## B. `--classifier file` (hand-off; you or any Claude Code session labels)
 ```bash

@@ -73,9 +73,10 @@ def test_corporate_actions_and_sector(tmp_path):
     assert s["BPCL"].low_confidence
 
 
-def _li(et, gov=True, hist=False, mat=None, date_="2026-06-01"):
+def _li(et, gov=True, hist=False, mat=None, date_="2026-06-01", title=None):
     from sentinelq.models import Label, LabelledItem, RawItem
-    return LabelledItem(RawItem("X", "news", et, "", "https://a.b/" + et, date_),
+    title = title or ("Chief Financial Officer resigns with immediate effect" if et == "management_exit" else et)
+    return LabelledItem(RawItem("X", "news", title, "", "https://a.b/" + et + (title if title != et else ""), date_),
                         Label(et, -1, "r", gov, mat, hist))
 
 
@@ -470,7 +471,7 @@ def test_pipeline_wires_stop_condition_and_caps_to_latest(tmp_path):
     opener, log = _doc_opener(per_window=30)
     g = GdeltNews(slice_days=30, sleep=lambda s: None, opener=opener)
     p = Pipeline(r, g, None, None, KeywordClassifier(), tmp_path / "o", tmp_path / "c.jsonl", date(2026, 7, 3),
-                 max_articles=50, text_cache=tmp_path / "ft.jsonl")
+                 max_articles=50, governance_pass=False, text_cache=tmp_path / "ft.jsonl")
     raw, _ = p.ingest(hold)
     news = [i for i in raw["ANGELONE"] if i.kind == "news"]
     assert len(news) == 50 and len(log) == 2                              # 30+30 collected, then trimmed to 50
@@ -577,7 +578,7 @@ def test_one_request_per_stock_when_enough_titles_name_the_company(tmp_path):
     h = Holding("BAJFINANCE", "Bajaj Finance", "BFSI")
     opener, log = _noisy_opener(n_title=60, n_noise=120)                       # 180 candidates, like the real run
     g = GdeltNews(sleep=lambda s: None, opener=opener)                         # defaults: 90-day window
-    p = Pipeline(r, g, None, None, KeywordClassifier(), tmp_path / "o", tmp_path / "c.jsonl", date(2026, 7, 3), max_articles=50)
+    p = Pipeline(r, g, None, None, KeywordClassifier(), tmp_path / "o", tmp_path / "c.jsonl", date(2026, 7, 3), max_articles=50, governance_pass=False)
     items, found, errs = p._fetch_stock(h)
     assert len(log) == 1 and not errs                                          # ONE request, no rolling back needed
     assert log[0]["sort"] == ["datedesc"] and log[0]["maxrecords"] == ["250"]  # newest first, up to 250
@@ -593,7 +594,7 @@ def test_steps_back_a_window_only_when_titles_are_scarce(tmp_path):
     h = Holding("BAJFINANCE", "Bajaj Finance", "BFSI")
     opener, log = _noisy_opener(n_title=20, n_noise=50)                        # 20 good titles per window
     g = GdeltNews(sleep=lambda s: None, opener=opener)
-    p = Pipeline(r, g, None, None, KeywordClassifier(), tmp_path / "o", tmp_path / "c.jsonl", date(2026, 7, 3), max_articles=50)
+    p = Pipeline(r, g, None, None, KeywordClassifier(), tmp_path / "o", tmp_path / "c.jsonl", date(2026, 7, 3), max_articles=50, governance_pass=False)
     items, _, _ = p._fetch_stock(h)
     assert len(log) == 3                                                       # 20 + 20 + 20 titles >= 50, then stop
     assert len([i for i in items if i.kind == "news"]) == 50
@@ -802,7 +803,7 @@ def test_pipeline_with_google_news_keeps_latest_50_titles_that_name_the_company(
     r = load_rubric()
     opener, log = _gn_opener(per_window=40, title="Bajaj Finance")
     g = GoogleNewsRSS(sleep=lambda s: None, opener=opener)
-    p = Pipeline(r, g, None, None, KeywordClassifier(), tmp_path / "o", tmp_path / "c.jsonl", date(2026, 7, 3), max_articles=50)
+    p = Pipeline(r, g, None, None, KeywordClassifier(), tmp_path / "o", tmp_path / "c.jsonl", date(2026, 7, 3), max_articles=50, governance_pass=False)
     items, found, errs = p._fetch_stock(Holding("BAJFINANCE", "Bajaj Finance", "BFSI"))
     news = [i for i in items if i.kind == "news"]
     assert not errs and len(news) == 50 and len(log) == 2                  # 40 + 40 collected, trimmed to the latest 50
@@ -819,3 +820,135 @@ def test_fulltext_skips_google_redirect_links(monkeypatch):
              RawItem("X", "news", "t2", "", "https://example.com/story", "2026-06-01")]
     fulltext.enrich(items)
     assert calls == ["https://example.com/story"] and items[0].parse == "headline-only (google link)"
+
+
+# ---- governance: literal-rule misfires (elevations scored as exits) and the 12-month governance pass -------------
+def _score_gov(*items):
+    from sentinelq.score import governance
+    sc, lab, pens = governance(list(items), load_rubric())
+    return sc, lab, pens, governance.ignored
+
+
+def test_unplanned_cxo_exit_is_penalised_angel_one_cpo():
+    sc, lab, pens, ign = _score_gov(
+        _li("regulatory_action", title="SEBI settlement order: Angel One pays Rs 4.28cr"),
+        _li("management_exit", title="Angel One Chief Product Officer resigns, effective 31-Aug-26", date_="2026-07-02"))
+    assert (sc, lab) == (72, "Flag") and {p["event_type"] for p in pens} == {"regulatory_action", "management_exit"} and not ign
+
+
+def test_elevation_is_not_a_management_exit_dr_reddys_aia_nestle_pattern():
+    for title in ("Dr. Reddy's elevates Kunwar Khurana as Head - Sales and Marketing",
+                  "Kunwar Khurana appointed as Head - Sales and Marketing at Dr Reddy's",
+                  "AIA Engineering board transition: Director moves to non-executive role",
+                  "Nestle India promotes finance head to Chief Financial Officer"):
+        sc, lab, pens, ign = _score_gov(_li("management_exit", title=title))     # even if the model mislabels it as an exit
+        assert sc == 100 and not pens, title
+        assert ign and ign[0]["event_type"] == "management_exit" and ign[0]["why"], title      # and the reason is recorded
+
+
+def test_planned_or_sub_cxo_exits_are_not_penalised_but_real_ones_are():
+    assert _score_gov(_li("management_exit", title="VP Operations superannuates effective 30-Jun-26"))[0] == 100
+    assert _score_gov(_li("management_exit", title="Head of Regional Sales resigns"))[0] == 100                 # below CXO tier
+    assert _score_gov(_li("management_exit", title="Company Secretary and Compliance Officer resigns"))[0] == 92
+    assert _score_gov(_li("management_exit", title="Zen Technologies CFO resigns"))[0] == 92
+    assert _score_gov(_li("management_exit", title="CEO steps down amid probe"))[0] == 92
+
+
+def test_routine_event_types_carry_no_penalty_and_are_reported_as_ignored():
+    sc, lab, pens, ign = _score_gov(_li("management_change_routine", title="New CFO appointed"),
+                                    _li("rpt_routine", title="Board approves royalty payments to parent"),
+                                    _li("investigation_closed", title="Court quashes probe"),
+                                    _li("board_change_routine", title="Board reconstituted"),
+                                    _li("auditor_rotation", title="Scheduled auditor rotation"))
+    assert sc == 100 and not pens and len(ign) == 5
+
+
+def test_classifier_prompt_defines_the_governance_types():
+    from sentinelq.classify import SYSTEM, tool_schema
+    r = load_rubric()
+    assert "management_change_routine" in SYSTEM and "Head - Sales and Marketing" in SYSTEM and "below cxo tier" in SYSTEM.lower()
+    enum = tool_schema(r)["input_schema"]["properties"]["event_type"]["enum"]
+    assert {"management_change_routine", "rpt_routine", "investigation_closed", "auditor_rotation"} <= set(enum)
+
+
+def test_keyword_stub_separates_exits_from_elevations():
+    from sentinelq.models import RawItem
+    kc = KeywordClassifier()
+    lab = lambda t: kc.classify(RawItem("X", "news", t, "", "https://x/y", "2026-06-01"), "Angel One")[0]["event_type"]
+    assert lab("Angel One Chief Product Officer resigns") == "management_exit"
+    assert lab("Angel One appoints Kunwar Khurana as Head - Sales and Marketing") == "management_change_routine"
+
+
+# ---- 12-month governance pass: finds events the latest-N headlines miss; never touches sentiment -----------------
+def _gov_feed_opener():
+    """Fake Google News: the plain query returns only recent, generic stories; the governance-keyword query also surfaces an
+    older CPO exit and an unrelated promotion."""
+    import re, urllib.parse as up
+    from datetime import timedelta as td
+    calls = {"sentiment": 0, "governance": 0}
+
+    def opener(req, timeout=30):
+        q = up.parse_qs(up.urlparse(req.full_url).query)["q"][0]
+        m = re.search(r"after:(\d{4}-\d\d-\d\d) before:(\d{4}-\d\d-\d\d)", q)
+        if not m:
+            return _RssResp(_rss([]))
+        lo, hi = date.fromisoformat(m.group(1)), date.fromisoformat(m.group(2)) - td(days=1)
+        rows = []
+        if "resigns" in q:                                           # governance-keyword query
+            calls["governance"] += 1
+            if lo <= date(2026, 1, 20) <= hi:
+                rows.append(("Angel One Chief Product Officer resigns - Economic Times", "https://news.google.com/rss/articles/cpo",
+                             "Tue, 20 Jan 2026 09:30:00 GMT", "Economic Times", "https://economictimes.indiatimes.com"))
+            if lo <= date(2026, 3, 2) <= hi:
+                rows.append(("Angel One elevates Kunwar Khurana as Head - Sales and Marketing - Mint", "https://news.google.com/rss/articles/promo",
+                             "Mon, 02 Mar 2026 09:30:00 GMT", "Mint", "https://livemint.com"))
+        else:                                                        # normal query: only recent generic news
+            calls["sentiment"] += 1
+            for k in range(60):
+                d = hi - td(days=k % 25)
+                if lo <= d <= hi:
+                    rows.append((f"Angel One business update {d} {k} - ET", f"https://news.google.com/rss/articles/s{d}{k}",
+                                 d.strftime("%a, %d %b %Y 09:30:00 GMT"), "ET", "https://economictimes.indiatimes.com"))
+        return _RssResp(_rss(rows))
+    return opener, calls
+
+
+def test_governance_pass_finds_old_cpo_exit_but_leaves_sentiment_alone(tmp_path):
+    from sentinelq.ingest.gnews import GoogleNewsRSS
+    from sentinelq.models import Holding
+    r = load_rubric()
+    opener, calls = _gov_feed_opener()
+    h = Holding("ANGELONE", "Angel One", "BFSI")
+    run_ = lambda gp: Pipeline(r, GoogleNewsRSS(sleep=lambda s: None, opener=opener), None, None, KeywordClassifier(), tmp_path / f"o{gp}",
+                               tmp_path / f"c{gp}.jsonl", date(2026, 7, 3), max_articles=40, governance_pass=gp).run([h])
+    off, on = run_(False), run_(True)
+    assert calls["governance"] > 0
+    s_off, s_on = off["scores"][0], on["scores"][0]
+    assert s_off.governance_score == 100                                  # latest-40 headlines never show the January exit
+    assert s_on.governance_score == 92 and [p["event_type"] for p in s_on.governance_penalties] == ["management_exit"]
+    assert "Chief Product Officer" in s_on.governance_penalties[0]["headline"]
+    assert [x["why"] for x in s_on.governance_ignored if "Kunwar" in x["headline"]]       # the promotion: seen, reported, NOT penalised
+    assert (s_off.company_sentiment, s_off.company_sentiment_raw) == (s_on.company_sentiment, s_on.company_sentiment_raw)   # sentiment identical
+    assert all(li.item.purpose == "governance" for li in on["kept"]["ANGELONE"] if "Chief Product" in li.item.title)
+
+
+def test_governance_selection_dedupes_against_sentiment_set_and_caps():
+    from sentinelq.ingest.select import name_tokens, select_governance
+    from sentinelq.models import Holding, RawItem
+    h = Holding("X", "Angel One", "S")
+    mk = lambda t, u, d: RawItem("X", "news", t, "", u, d, "x.com")
+    sent = [mk("Angel One Chief Product Officer resigns", "https://a/1", "2026-07-02")]
+    cands = [mk("Angel One Chief Product Officer resigns", "https://a/1", "2026-07-02"),            # already in sentiment set
+             mk("Angel One SEBI order on brokers", "https://a/2", "2026-05-01"),
+             mk("Angel One shares rally on strong volumes", "https://a/3", "2026-06-01"),            # no governance keyword
+             *[mk(f"Angel One penalty news {k}", f"https://a/p{k}", f"2026-04-{k + 1:02d}") for k in range(10)]]
+    out = select_governance(cands, sent, 4, name_tokens(h))
+    assert len(out) == 4 and all(i.purpose == "governance" for i in out)
+    assert all("rally" not in i.title and i.url != "https://a/1" for i in out)
+
+
+def test_default_is_100_articles_per_stock():
+    import argparse
+    from sentinelq import cli
+    src = (ROOT / "sentinelq" / "cli.py").read_text()
+    assert 'default=100, help="latest N articles per company' in src

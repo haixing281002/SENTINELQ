@@ -1,8 +1,8 @@
 # GDELT: how Sentinel Q gets the news (free, nothing stored)
 
 ## The rule
-For every stock, **roll the search window back from the as-of date, newest first, and stop as soon as we hold 50 usable
-articles.** Those 50 are the *latest* articles. The maximum lookback stays 12 months: if fewer than 50 exist in 12 months we
+For every stock, **roll the search window back from the as-of date, newest first, and stop as soon as we hold 100 usable
+articles.** Those 100 are the *latest* articles. The maximum lookback stays 12 months: if fewer than 100 exist in 12 months we
 use what there is (and mark the stock low confidence). "Usable" = not a market roundup that never names the company.
 
 ## Free, and nothing billed

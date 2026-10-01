@@ -22,7 +22,7 @@ from concurrent.futures import ThreadPoolExecutor
 from .narrate import TemplateNarrator, portfolio_facts
 from .progress import Display
 from .style import classify_style
-from .ingest.select import count_usable, month_spark, name_tokens, select_articles
+from .ingest.select import count_usable, month_spark, name_tokens, select_articles, select_governance
 from .pdf import build_pdf
 from .report import write_reports
 from .rubric import Rubric
@@ -92,7 +92,7 @@ class Pipeline:
                  max_label_failure: float = 0.10,
                  text_cache=None, ui: Display | None = None,          # text_cache: ignored (articles are never cached)
                  allow_missing_news: bool = False, ingest_retry_wait: float = 60.0, prefilter: bool = True,
-                 disk_cache: bool = True):
+                 disk_cache: bool = True, governance_pass: bool = True, governance_cap: int = 30):
         self.r, self.news, self.actions, self.prices, self.clf = rubric, news, actions, prices, classifier
         self.out = Path(out_dir)
         self.cache = LabelCache(cache_path if disk_cache else None)   # label cache holds hash -> label only, no article text
@@ -101,6 +101,7 @@ class Pipeline:
         self.max_articles = max_articles
         self.max_label_failure = max_label_failure
         self.fetch_text = fetch_text
+        self.governance_pass, self.governance_cap = governance_pass, governance_cap
         self.narrator = narrator or TemplateNarrator()
         self.meta = {"title": title, "coverage": coverage}
         self.ui = ui or Display("off")
@@ -124,7 +125,13 @@ class Pipeline:
             except Exception as e:  # a provider failure must be visible, not fatal
                 errs.append({"symbol": h.symbol, "provider": type(prov).__name__, "error": repr(e)})
         found = len([i for i in items if i.kind == "news"])
-        items = select_articles(items, self.max_articles, toks)      # the LATEST max_articles usable ones
+        items = select_articles(items, self.max_articles, toks)      # the LATEST max_articles usable ones (sentiment pass)
+        if self.governance_pass and hasattr(self.news, "fetch_governance") and not errs:
+            try:    # governance is a 12-month rubric: search the whole year for governance events, independent of the latest-N pull
+                gov = self.news.fetch_governance(h, self.as_of - timedelta(days=w["news_days"]), self.as_of)
+                items += select_governance(gov, items, self.governance_cap, toks)
+            except Exception as e:
+                errs.append({"symbol": h.symbol, "provider": type(self.news).__name__ + ".governance", "error": repr(e)})
         return items, found, errs
 
     def _prep(self, h, items):
@@ -160,8 +167,11 @@ class Pipeline:
         consecutive = 0
 
         def show(idx, h, items, found, err_txt, secs):
-            nn = [i for i in items if i.kind == "news"]
-            ui.ingest_stock(idx, n, h, found, len(nn), len(items) - len(nn), Counter(i.style for i in nn), False, err_txt,
+            nn = [i for i in items if i.kind == "news" and i.purpose == "sentiment"]
+            gv = sum(1 for i in items if i.purpose == "governance")
+            if gv:
+                ui.note(f"        governance pass: {gv} candidate article(s) from the full 12 months (feed governance scoring only)", "d")
+            ui.ingest_stock(idx, n, h, found, len(nn), len(items) - len(nn) - gv, Counter(i.style for i in nn), False, err_txt,
                             secs, self.max_articles, month_spark(items, self.as_of - timedelta(days=w_days), self.as_of, ui.ascii))
 
         for idx, h in enumerate(holdings, 1):

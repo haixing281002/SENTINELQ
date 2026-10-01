@@ -28,6 +28,17 @@ SYSTEM = (
     "(background mention); otherwise false. "
     "about_company is false if the item is NOT actually about the named company (a different entity with a similar "
     "name, a generic market roundup that only lists it, an unrelated topic); when false, use event_type 'other', sentiment 0. "
+    "GOVERNANCE TYPES - the penalty depends on picking the right one: "
+    "management_exit = an UNPLANNED departure (resignation, termination, abrupt exit) of a CEO, MD, CFO, any 'Chief ... Officer' "
+    "(e.g. Chief Product Officer), the Company Secretary or the Compliance Officer. "
+    "management_change_routine = every other people item: elevation, promotion, re-designation, new appointment, planned "
+    "retirement/superannuation/succession, or an exit/appointment BELOW CXO tier (Head of a function, VP, director-level). "
+    "Example: 'X appointed as Head - Sales and Marketing' is management_change_routine, never management_exit. "
+    "rpt_concern = material or investor-contested related-party transaction; rpt_routine = routine, approved, arm's-length RPT. "
+    "investigation = an unresolved probe/raid/inquiry; investigation_closed = concluded, quashed or cleared. "
+    "board_independence = combined chair/MD roles or independent-director gaps; board_change_routine = ordinary board changes. "
+    "auditor_resignation / auditor_restatement = adverse; auditor_rotation = scheduled rotation or routine reappointment. "
+    "regulatory_action = a SEBI / exchange / RBI order, penalty or settlement. "
     "Calibration: SEBI/regulator order or settlement -> regulatory_action, -2, governance. CXO/CFO resignation -> management_exit, -1, "
     "governance. Record quarterly profit / revenue growth -> earnings_beat, +2. Profit collapse -> earnings_miss, -2. Routine broker "
     "target reiteration -> analyst_action, +1 or 0. Dividend declared -> dividend, +1. "
@@ -125,7 +136,10 @@ _RULES = [  # (regex, event_type, sentiment, governance)
     (r"independent director|board independence|combined (roles|chair)", "board_independence", -1, True),
     (r"pledge", "pledge", -1, True),
     (r"related[- ]party", "rpt_concern", -1, True),
-    (r"resign|steps down|exit of|quits", "management_exit", -1, True),
+    (r"(chief|cfo|ceo|\bmd\b|managing director|company secretary|compliance officer).{0,60}(resign|quits?|steps? down|exit|terminat)|"
+     r"(resign|quits?|steps? down|terminat).{0,60}(chief|cfo|ceo|\bmd\b|managing director|company secretary|compliance officer)", "management_exit", -1, True),
+    (r"appointed|appoints|elevat|promot|re-?designat|superannuat|retire|takes? charge|named (as )?head", "management_change_routine", 0, True),
+    (r"resign|steps? down|quits?", "management_change_routine", 0, True),
     (r"lawsuit|litigation|court", "litigation", -1, True),
     (r"beat|record profit|profit (up|jumps|rises)", "earnings_beat", 2, False),
     (r"miss|profit (falls|drops|declines)|loss widens", "earnings_miss", -2, False),
