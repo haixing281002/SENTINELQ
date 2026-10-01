@@ -96,6 +96,8 @@ def write_audit(out: Path, result: dict, rubric, params: dict, queries: list[dic
           f"- Python {sys.version.split()[0]} on {platform.system()} {platform.release()}", "",
           "## Parameters (everything that shaped this run)", "", "| setting | value |", "|---|---|"]
     md += [f"| {k} | {v} |" for k, v in params.items()]
+    retr = run.get("retrieval", {})
+    md += ["", f"- **Retrieval: {retr.get('mode', '?')}** - {retr.get('note', '')}", f"- Universe hash `{run.get('universe_hash', '')[:12]}` (diffed against the last confirmed run before this run started)"]
     md += ["", "## Step 1 - Input", "", f"{len(scores)} stocks read (symbol, company, sector; cap/weight only for display).", "",
            "| symbol | company | sector | cap |", "|---|---|---|---|"]
     md += [f"| {s.symbol} | {s.name} | {s.sector} | {s.cap} |" for s in scores]
@@ -105,6 +107,15 @@ def write_audit(out: Path, result: dict, rubric, params: dict, queries: list[dic
            "| symbol | requests | retrieved (kept after selection) | of which governance-pass | corporate actions |", "|---|---|---|---|---|"]
     for c in result["coverage"]:
         md.append(f"| {c['symbol']} | {reqs.get(c['symbol'], 0)} | {c['retrieved']} | {gov_cands.get(c['symbol'], 0)} | {c['actions_kept']} |")
+    md += ["", "Evidence window actually covered (sentiment needs the 12-month lookback, not only the latest weeks):", "",
+           "| symbol | relevant articles | first | last | span (days) | status |", "|---|---|---|---|---|---|"]
+    md += [f"| {s.symbol} | {s.relevant_articles} | {s.evidence_first} | {s.evidence_last} | {s.evidence_span_days if s.evidence_span_days is not None else ''} | {s.sentiment_note or 'ok'} |" for s in scores]
+    ver = run.get("verified", {})
+    if ver.get("file"):
+        md += ["", f"Human-verified evidence (`{ver['file']}`), merged before scoring - union-then-rescore: **{len(ver.get('applied', []))} applied**, "
+                   f"{len(ver.get('skipped', []))} not applicable at this as-of date.", ""]
+        md += [f"- {v['symbol']}: {v['headline'][:110]} - weight {v['weight']}, {v['status']} ({v['source']})" for v in ver.get("applied", [])]
+        md += [f"- (skipped) {v['symbol']}: {v['headline'][:90]} - {v['why']}" for v in ver.get("skipped", [])]
     md += ["", "## Step 3 - Classify (the only AI step)", "",
            f"Model `{run['classifier_model']}` labels text it is handed: event type from a fixed taxonomy, sentiment -2..+2, one-line rationale, "
            f"governance flag. Reply structure enforced by JSON schema: **{params.get('schema_enforced')}**. Temperature: not controllable via the Claude Code CLI "
@@ -123,6 +134,9 @@ def write_audit(out: Path, result: dict, rubric, params: dict, queries: list[dic
         pens = "; ".join(f"{p['penalty']:+g} {p['event_type']} ({p['date']})" for p in s.governance_penalties) or "none"
         ign = "; ".join(f"{p['event_type']} ({p['date']}): {p['why']}" for p in s.governance_ignored) or "none"
         md.append(f"| {s.symbol} | {s.company_sentiment} / {s.company_sentiment_raw} | {s.governance_score:g} {s.governance_label} | {pens} | {ign} |")
+    lint = result.get("lint", [])
+    md += ["", f"Price-language lint (share-price moves never feed sentiment): {len(lint)} sentence(s) removed from sentiment commentary." +
+           ("" if not lint else " " + "; ".join(f"{x['symbol']}: \"{x['removed_sentence'][:80]}\"" for x in lint[:8]))]
     md += ["", "## Step 6 - Report", "", "Files and checksums are in `audit/manifest.json`.", ""]
     (ad / "RUN_RECORD.md").write_text("\n".join(md) + "\n", encoding="utf-8")
 

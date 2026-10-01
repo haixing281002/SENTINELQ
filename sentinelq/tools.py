@@ -5,7 +5,7 @@
   python -m sentinelq inspect label  --company NAME --headline TEXT [--classifier claude-code|keyword]
                                                                             steps 3+4: label one headline and show the validation verdict
   python -m sentinelq verify RUN_DIR                                        step 5: recompute every score from the saved evidence and compare
-  python -m sentinelq render RUN_DIR                                        step 6: rebuild the PDF from the saved scores + (editable) narrative.json
+  python -m sentinelq merge RUN_A RUN_B --out DIR                           fix 7: union of two runs' evidence (+ verified events), scored ONCE\n  python -m sentinelq render RUN_DIR                                        step 6: rebuild the PDF from the saved scores + (editable) narrative.json
 """
 from __future__ import annotations
 import argparse
@@ -84,10 +84,24 @@ def inspect_label(a) -> int:
     verdict = validate_label(item, lab, r, date.fromisoformat(a.date), 365)
     print(f"[STEP 4/6 VALIDATE] {'PASS' if verdict is None else 'DROP: ' + verdict}")
     if verdict is None:
-        from .score import literal_rule_override
-        why = literal_rule_override(LabelledItem(item, to_label(lab), raw))
-        print(f"  governance: {'NOT penalised - ' + why if why else 'eligible for the rubric penalty for ' + lab['event_type'] if lab['event_type'] in r['governance']['penalties'] else 'no governance penalty for this type'}")
+        from .score import gate
+        li = LabelledItem(item, to_label(lab), raw)
+        p, why, bucket = gate(li, r)
+        keys = ("event_type", "subject", "occurred_at_company", "action_stage", "severity", "amount_inr_cr", "people_direction", "role_tier", "event_key")
+        print("  gate answers:", {k: lab.get(k) for k in keys if lab.get(k) is not None})
+        print("  GOVERNANCE:", (f"PENALTY {p:+g}  ({why})" if p is not None else f"NOT penalised - {why}") if lab.get("governance_flag") else "not a governance item")
     return 0
+
+
+def _row_to_item(r: dict) -> LabelledItem:
+    it = RawItem(r["symbol"], r.get("kind", "news"), r["headline"], "", r.get("url", ""), r["date"], r.get("source", ""),
+                 purpose=r.get("purpose", "sentiment"), source_ref=r.get("source_ref", "") or "", verified=r.get("verified", "") or "",
+                 penalty_override=r.get("penalty_override"), origin=r.get("origin", ""))
+    lab = Label(r["event_type"], r["sentiment"], r.get("rationale", ""), bool(r["governance_flag"]), r.get("materiality"), bool(r.get("historical")),
+                subject=r.get("subject"), occurred_at_company=r.get("occurred_at_company"), action_stage=r.get("action_stage"),
+                severity=r.get("severity"), amount_inr_cr=r.get("amount_inr_cr"), people_direction=r.get("people_direction"),
+                role_tier=r.get("role_tier"), event_key=r.get("event_key"))
+    return LabelledItem(it, lab)
 
 
 def _load_run(run: Path):
@@ -105,9 +119,7 @@ def verify(a) -> int:
     holdings = [Holding(s["symbol"], s["name"], s["sector"], s.get("cap", ""), s.get("weight", "")) for s in saved]
     by: dict[str, list[LabelledItem]] = {h.symbol: [] for h in holdings}
     for r in ev:
-        it = RawItem(r["symbol"], r.get("kind", "news"), r["headline"], "", r["url"], r["date"], r.get("source", ""), purpose=r.get("purpose", "sentiment"))
-        lab = Label(r["event_type"], r["sentiment"], r.get("rationale", ""), bool(r["governance_flag"]), r.get("materiality"), bool(r.get("historical")))
-        by[r["symbol"]].append(LabelledItem(it, lab))
+        by[r["symbol"]].append(_row_to_item(r))
     recomputed = score_portfolio(holdings, by, {s["symbol"]: s["n_dropped"] for s in saved}, as_of, rubric)
     fields = ["company_sentiment", "company_sentiment_raw", "sector_sentiment", "governance_score", "governance_label", "corporate_action_score"]
     bad = 0
@@ -125,6 +137,68 @@ def verify(a) -> int:
         print("\n  NOTE: the rubric file in the repo has CHANGED since this run (verified against the rubric embedded in the run).")
     print(f"\n{'ALL SCORES REPRODUCED' if not bad else str(bad) + ' STOCK(S) DO NOT MATCH - investigate'}")
     return 1 if bad else 0
+
+
+def merge(a) -> int:
+    """Union-then-rescore (Reconciliation fix 7): take the UNION of the evidence from two runs (plus human-verified events), then score ONCE
+    under one rubric. Never average two scores; never pick a side."""
+    from .narrate import TemplateNarrator, portfolio_facts
+    from .pdf import build_pdf
+    from .verified import load_verified
+    ra, rb = Path(a.run_a), Path(a.run_b)
+    ev_a, sc_a, meta_a = _load_run(ra)
+    ev_b, sc_b, meta_b = _load_run(rb)
+    rubric = load_rubric(a.rubric) if a.rubric else Rubric(meta_a["rubric"], meta_a["rubric_sha256"])
+    as_of = date.fromisoformat(meta_a["as_of"])
+    syms = {s["symbol"]: s for s in sc_a + sc_b}
+    holdings = [Holding(s["symbol"], s["name"], s["sector"], s.get("cap", ""), s.get("weight", "")) for s in syms.values()]
+    by: dict[str, list[LabelledItem]] = {h.symbol: [] for h in holdings}
+    seen, n_a, n_b = set(), 0, 0
+    key = lambda r: (r["symbol"], (r.get("url") or r["headline"]).strip().lower().rstrip("/"))
+    for tag, rows in (("A", ev_a), ("B", ev_b)):
+        for r in rows:
+            if key(r) in seen:
+                continue
+            seen.add(key(r))
+            by[r["symbol"]].append(_row_to_item(r))
+            n_a += tag == "A"
+            n_b += tag == "B"
+    n_v = 0
+    if a.verified and Path(a.verified).exists():
+        vit, _skip = load_verified(a.verified, as_of, rubric["windows"]["news_days"], set(by))
+        for li in vit:
+            by[li.item.symbol].append(li)
+        n_v = len(vit)
+    dropped = {s: max(next((x["n_dropped"] for x in sc_a if x["symbol"] == s), 0), next((x["n_dropped"] for x in sc_b if x["symbol"] == s), 0)) for s in by}
+    merged = score_portfolio(holdings, by, dropped, as_of, rubric)
+    out = Path(a.out)
+    out.mkdir(parents=True, exist_ok=True)
+    meta = {**meta_a, "rubric": rubric.data, "rubric_sha256": rubric.sha256, "merged_from": [str(ra), str(rb)],
+            "retrieval": {"mode": "merged_union", "as_of": meta_a["as_of"], "run_date": date.today().isoformat(),
+                          "note": f"Union of the evidence of two runs plus {n_v} human-verified event(s), re-scored once under rubric v{rubric.version}."}}
+    (out / "scores.json").write_text(json.dumps([m.to_dict() for m in merged], indent=2))
+    (out / "evidence.json").write_text(json.dumps([li.to_row() for v in by.values() for li in v], indent=2))
+    (out / "run_meta.json").write_text(json.dumps(meta, indent=2))
+    nar = {m.symbol: TemplateNarrator().holding(m, by[m.symbol]) for m in merged}
+    obs = TemplateNarrator().portfolio(portfolio_facts(merged, by))
+    (out / "narrative.json").write_text(json.dumps({"holdings": nar, "observations": obs}, indent=2))
+    build_pdf(out / "sentinelq_scorecard.pdf", {"run": meta, "scores": merged, "kept": by}, rubric, nar, obs,
+              {"title": a.title or meta_a.get("title") or "Portfolio", "coverage": meta_a.get("coverage", "")})
+    sa = {x["symbol"]: x for x in sc_a}
+    sb = {x["symbol"]: x for x in sc_b}
+    rows = ["| symbol | A: S / G | B: S / G | MERGED: S / G / label | change vs A | change vs B |", "|---|---|---|---|---|---|"]
+    fmt = lambda x: "-" if x is None else f"{x['company_sentiment'] if x['company_sentiment'] is not None else 'n/a'} / {x['governance_score']:g}"
+    for m in merged:
+        ca, cb = sa.get(m.symbol), sb.get(m.symbol)
+        d = lambda o: "" if o is None else ("same" if o["governance_score"] == m.governance_score and o["company_sentiment"] == m.company_sentiment
+                                            else f"G {o['governance_score']:g}->{m.governance_score:g}; S {o['company_sentiment']}->{m.company_sentiment}")
+        rows.append(f"| {m.symbol} | {fmt(ca)} | {fmt(cb)} | {m.company_sentiment if m.company_sentiment is not None else 'n/a'} / {m.governance_score:g} / {m.governance_label} | {d(ca)} | {d(cb)} |")
+    (out / "MERGE_RECORD.md").write_text("# Union-then-rescore merge\n\n" + f"- Run A: `{ra}` ({len(ev_a)} evidence rows)\n- Run B: `{rb}` ({len(ev_b)} evidence rows)\n"
+        f"- Union: {sum(len(v) for v in by.values())} evidence rows ({n_a} from A, {n_b} only in B, {n_v} human-verified)\n- One rubric: v{rubric.version} sha `{rubric.sha256[:12]}`\n"
+        "- Rule: union of evidence, scored once. Scores are never averaged and no side is picked.\n\n" + "\n".join(rows) + "\n", encoding="utf-8")
+    print(f"merged {len(merged)} stocks -> {out}/ (MERGE_RECORD.md, scores.json, sentinelq_scorecard.pdf)")
+    print("\n".join(rows))
+    return 0
 
 
 def render(a) -> int:
@@ -164,6 +238,13 @@ def main(argv: list[str]) -> int:
     q.add_argument("--url", default="https://example.com/inspect")
     q.add_argument("--date", default=date.today().isoformat())
     q.add_argument("--classifier", choices=["claude-code", "keyword"], default="claude-code")
+    mg = sub.add_parser("merge")
+    mg.add_argument("run_a")
+    mg.add_argument("run_b")
+    mg.add_argument("--out", required=True)
+    mg.add_argument("--verified", default="portfolio/verified_events.csv")
+    mg.add_argument("--rubric")
+    mg.add_argument("--title")
     v = sub.add_parser("verify")
     v.add_argument("run_dir")
     r = sub.add_parser("render")
@@ -174,4 +255,4 @@ def main(argv: list[str]) -> int:
     a = p.parse_args(argv)
     if a.cmd == "inspect":
         return {"input": inspect_input, "news": inspect_news, "label": inspect_label}[a.what](a)
-    return {"verify": verify, "render": render}[a.cmd](a)
+    return {"verify": verify, "render": render, "merge": merge}[a.cmd](a)

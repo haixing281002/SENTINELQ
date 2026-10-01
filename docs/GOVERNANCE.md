@@ -31,3 +31,11 @@ Two layers enforce this:
 
 Known cases this fixes: Dr. Reddy's "Kunwar Khurana as Head - Sales and Marketing" (elevation), and the same pattern at AIA Engineering
 and Nestle. Angel One's CPO exit **is** an unplanned CXO exit and is penalised (-8).
+
+
+## 3. The verification gate (Reconciliation s7 fix 2)
+Before any penalty each governance item is checked: **is the company the subject** (not the victim, a lender, a peer, the sector, macro policy or shareholders)?
+**Did it happen at the company? How severe?** Then the conventions in `rubric/rubric_v1.json` (`governance.conventions`) apply: orders / settlements are -20, a notice or demand
+with no order is a -10 overhang, resolved matters are not penalised, non-integrity sums under Rs 10 cr are the -5 procedural band, the same real-world event is one event
+(within a family), and the -5 memory discount applies only if nothing in the window was penalised. Everything not penalised is kept in the report as "NOT scored: <reason>".
+Full table: `docs/RECONCILIATION_FIXES.md`.

@@ -150,7 +150,11 @@ def build_pdf(path: Path, res: dict, rubric, narr: dict, observations: list[dict
         + rl("<b>Clean</b> (≥ 95), <b>Watch</b> (80–94), <b>Flag</b> (below 80)").replace("&lt;b&gt;", "<b>") .replace("&lt;/b&gt;", "</b>")
         + rl(". Flag names are highlighted in red on the summary table and warrant IC-level scrutiny before additional risk is added. The rubric is applied mechanically so the same event produces the same penalty across all holdings."), BODY)]
     st += [P("Corporate actions", H2), P("Listed factually — dividends, buybacks, splits, bonuses, rights, M&A, delistings, capex commitments. They inform context but do not feed into either the sentiment or the governance score.", BODY),
-           P("Every score in this report can be traced back to specific, dated, sourced news in the appendix. Where retrieval coverage is thin, this is stated explicitly in the rationale.", NOTE), PageBreak()]
+           P("Every score in this report can be traced back to specific, dated, sourced news in the appendix. Where retrieval coverage is thin, this is stated explicitly in the rationale.", NOTE)]
+    retr = res["run"].get("retrieval") or {}
+    if retr.get("mode") == "live_index_backdated":       # Reconciliation fix 1: never present a backdated live search as a backtest
+        st.append(P("Retrospective run: " + retr["note"], NOTE))
+    st.append(PageBreak())
 
     # ============ Page 2: rubric ============
     st += h1("Scoring rubric") + [P("Sentiment anchors", H2)]

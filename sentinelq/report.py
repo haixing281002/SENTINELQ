@@ -64,9 +64,10 @@ def write_reports(out: Path, res: dict, rubric) -> None:
     news.sort(key=lambda x: (x.item.symbol, x.item.published), reverse=False)
     _sheet(wb, "Evidence - Sentiment", ev_head, [ev(x) for x in news], link_col=7, widths=W)
 
-    gov = [[s.symbol, p["date"], p["headline"], p["event_type"], p["penalty"], "scored", p["url"]]
+    gov = [[s.symbol, p["date"], p["headline"], p["event_type"], p["penalty"],
+            "scored - " + p.get("basis", "") + (f" [{p['verified']}]" if p.get("verified") else ""), p["url"] or p.get("source_ref", "")]
            for s in scores for p in s.governance_penalties]
-    gov += [[s.symbol, p["date"], p["headline"], p["event_type"], 0, "NOT scored: " + p["why"], p["url"]]
+    gov += [[s.symbol, p["date"], p["headline"], p["event_type"], 0, "NOT scored: " + p["why"], p["url"] or p.get("source_ref", "")]
             for s in scores for p in s.governance_ignored]
     _sheet(wb, "Evidence - Governance", ["Symbol", "Date", "Headline", "Event Type", "Penalty", "Treatment", "Source URL"],
            gov, link_col=6, widths={**W, "Treatment": 55})
@@ -78,11 +79,13 @@ def write_reports(out: Path, res: dict, rubric) -> None:
            ca, link_col=6, widths=W)
 
     cov = [[c["symbol"], c["retrieved"], c["news_kept"], c["actions_kept"], c["kept"], c["dropped"], c["label_failed"],
-            "YES" if c["low_confidence"] else ""] for c in res["coverage"]]
+            c.get("relevant_articles", ""), c.get("span_days", ""), c.get("sentiment_status", ""), "YES" if c["low_confidence"] else ""]
+           for c in res["coverage"]]
     t = run["totals"]
-    cov.append(["PORTFOLIO", t["retrieved"], "", "", t["kept"], t["dropped"], t["label_failed"], ""])
+    cov.append(["PORTFOLIO", t["retrieved"], "", "", t["kept"], t["dropped"], t["label_failed"], "", "", "", ""])
     _sheet(wb, "Coverage", ["Symbol", "Retrieved", "News Kept", "Actions Kept", "Kept", "Dropped",
-                            "Of which: model failed to label", "Low Confidence"], cov)
+                            "Of which: model failed to label", "Relevant articles", "Evidence span (days)", "Sentiment status", "Low Confidence"], cov,
+           widths={"Sentiment status": 60})
     ws = wb["Coverage"]
     ws.append([])
     ws.append(["Dropped items (stage, reason)"])

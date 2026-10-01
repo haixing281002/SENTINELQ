@@ -471,7 +471,7 @@ def test_pipeline_wires_stop_condition_and_caps_to_latest(tmp_path):
     opener, log = _doc_opener(per_window=30)
     g = GdeltNews(slice_days=30, sleep=lambda s: None, opener=opener)
     p = Pipeline(r, g, None, None, KeywordClassifier(), tmp_path / "o", tmp_path / "c.jsonl", date(2026, 7, 3),
-                 max_articles=50, governance_pass=False, text_cache=tmp_path / "ft.jsonl")
+                 max_articles=50, governance_pass=False, fundamentals_pass=False, text_cache=tmp_path / "ft.jsonl")
     raw, _ = p.ingest(hold)
     news = [i for i in raw["ANGELONE"] if i.kind == "news"]
     assert len(news) == 50 and len(log) == 2                              # 30+30 collected, then trimmed to 50
@@ -578,7 +578,7 @@ def test_one_request_per_stock_when_enough_titles_name_the_company(tmp_path):
     h = Holding("BAJFINANCE", "Bajaj Finance", "BFSI")
     opener, log = _noisy_opener(n_title=60, n_noise=120)                       # 180 candidates, like the real run
     g = GdeltNews(sleep=lambda s: None, opener=opener)                         # defaults: 90-day window
-    p = Pipeline(r, g, None, None, KeywordClassifier(), tmp_path / "o", tmp_path / "c.jsonl", date(2026, 7, 3), max_articles=50, governance_pass=False)
+    p = Pipeline(r, g, None, None, KeywordClassifier(), tmp_path / "o", tmp_path / "c.jsonl", date(2026, 7, 3), max_articles=50, governance_pass=False, fundamentals_pass=False)
     items, found, errs = p._fetch_stock(h)
     assert len(log) == 1 and not errs                                          # ONE request, no rolling back needed
     assert log[0]["sort"] == ["datedesc"] and log[0]["maxrecords"] == ["250"]  # newest first, up to 250
@@ -594,7 +594,7 @@ def test_steps_back_a_window_only_when_titles_are_scarce(tmp_path):
     h = Holding("BAJFINANCE", "Bajaj Finance", "BFSI")
     opener, log = _noisy_opener(n_title=20, n_noise=50)                        # 20 good titles per window
     g = GdeltNews(sleep=lambda s: None, opener=opener)
-    p = Pipeline(r, g, None, None, KeywordClassifier(), tmp_path / "o", tmp_path / "c.jsonl", date(2026, 7, 3), max_articles=50, governance_pass=False)
+    p = Pipeline(r, g, None, None, KeywordClassifier(), tmp_path / "o", tmp_path / "c.jsonl", date(2026, 7, 3), max_articles=50, governance_pass=False, fundamentals_pass=False)
     items, _, _ = p._fetch_stock(h)
     assert len(log) == 3                                                       # 20 + 20 + 20 titles >= 50, then stop
     assert len([i for i in items if i.kind == "news"]) == 50
@@ -803,7 +803,7 @@ def test_pipeline_with_google_news_keeps_latest_50_titles_that_name_the_company(
     r = load_rubric()
     opener, log = _gn_opener(per_window=40, title="Bajaj Finance")
     g = GoogleNewsRSS(sleep=lambda s: None, opener=opener)
-    p = Pipeline(r, g, None, None, KeywordClassifier(), tmp_path / "o", tmp_path / "c.jsonl", date(2026, 7, 3), max_articles=50, governance_pass=False)
+    p = Pipeline(r, g, None, None, KeywordClassifier(), tmp_path / "o", tmp_path / "c.jsonl", date(2026, 7, 3), max_articles=50, governance_pass=False, fundamentals_pass=False)
     items, found, errs = p._fetch_stock(Holding("BAJFINANCE", "Bajaj Finance", "BFSI"))
     news = [i for i in items if i.kind == "news"]
     assert not errs and len(news) == 50 and len(log) == 2                  # 40 + 40 collected, trimmed to the latest 50
@@ -969,7 +969,7 @@ def test_labeller_requests_enforced_schema_and_reads_structured_reply(tmp_path, 
     clf.prefetch(_items(3))
     assert len(clf._res) == 3 and seen["schema"] == batch_schema(load_rubric())
     props = seen["schema"]["properties"]["labels"]["items"]["properties"]
-    assert set(props["event_type"]["enum"]) == set(load_rubric().event_types) and props["sentiment"]["maximum"] == 2
+    assert set(props["event_type"]["enum"]) == set(load_rubric().event_types) - set(load_rubric().data["reserved_event_types"]) and props["sentiment"]["maximum"] == 2
 
 
 def test_schema_flag_failure_falls_back_to_validated_text(tmp_path, monkeypatch):
@@ -1019,7 +1019,7 @@ def test_audit_record_is_complete_and_checksums_match(tmp_path):
     opener, _ = _gn_opener(per_window=5, title="Angel One")
     hold = load_portfolio(ROOT / "examples" / "portfolio.csv")[:1]
     Pipeline(r, GoogleNewsRSS(sleep=lambda s: None, opener=opener), None, None, KeywordClassifier(), tmp_path / "o", tmp_path / "c.jsonl",
-             date(2026, 7, 3), max_articles=10, governance_pass=False).run(hold)
+             date(2026, 7, 3), max_articles=10, governance_pass=False, fundamentals_pass=False).run(hold)
     ad = tmp_path / "o" / "audit"
     rec = (ad / "RUN_RECORD.md").read_text()
     for h in ("## Parameters", "## Step 1 - Input", "## Step 2 - Ingest", "## Step 3 - Classify", "## Step 4 - Validate", "## Step 5 - Score", "## Step 6 - Report"):

@@ -300,7 +300,8 @@ class Display:
             pens = " ".join(f"{p['penalty']:+g} {p['event_type'].replace('_', ' ')}" for p in sc.governance_penalties) or "no penalties"
             ign = f", {len(sc.governance_ignored)} item(s) deliberately NOT penalised" if sc.governance_ignored else ""
             self.track_set(sc.symbol, 5, "+")
-            self.step(5, f"{sc.symbol}: sentiment {sent} (weighted mean {sc.company_sentiment_raw} over {sc.n_items} kept items)  |  "
+            self.step(5, f"{sc.symbol}: sentiment {sent if sc.company_sentiment is not None else 'n/a - ' + sc.sentiment_note.lower()}"
+                         f"{'' if sc.company_sentiment is None else f' (weighted mean {sc.company_sentiment_raw} over {sc.relevant_articles} relevant articles, {sc.evidence_first}..{sc.evidence_last})'}  |  "
                          f"governance 100 {pens} = {sc.governance_score:g} {sc.governance_label.upper() if sc.governance_label == 'Flag' else sc.governance_label}"
                          f"{ign}" + ("  |  LOW CONFIDENCE" if sc.low_confidence else ""), col)
         self.line("")

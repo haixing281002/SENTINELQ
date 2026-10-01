@@ -61,3 +61,6 @@ Free sources only. `--news gnews` (default): Google News RSS, the mechanism extr
 * `python -m sentinelq verify runs/<date>` recomputes every score from the saved evidence; `render` rebuilds the PDF from `scores.json` + editable `narrative.json`;
   `inspect input|news|label` runs one step on one stock/headline. Skills: `sentinelq-step1-input` ... `sentinelq-step6-report`, `sentinelq-audit`.
 * Conformance with the architecture document, including gaps: `docs/PIPELINE_CONFORMANCE.md`.
+
+## Reconciliation fixes
+The seven fixes from the 1-Oct-2026 Reconciliation (retrieval policy, governance verification gate, written conventions, universe lock, price-language lint, minimum evidence standard, union-then-rescore) are implemented - see `docs/RECONCILIATION_FIXES.md` (what, where, tests, and what is still open).

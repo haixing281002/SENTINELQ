@@ -15,3 +15,5 @@ sentiment is shown as an integer, the unrounded mean is kept. Prices never enter
 **Per-number workings:** `runs/<date>/audit/score_workings.csv` (each article: age, weight, contribution; governance running score; penalties NOT applied and why).
 Governance for one stock from a hand-made event list: `python scripts/score_governance.py events.json`.
 **Never** nudge a score; change labels (visibly) or the rubric file.
+
+**Conventions (rubric `governance.conventions`):** verification gate, Rs 10 cr materiality floor, notice-without-order = -10, 7-day same-event dedupe within a family, memory discount only with no in-window penalty, one corporate action per declaration, human-verified weights. **Minimum evidence:** < 8 relevant articles or no results print -> sentiment n/a (Insufficient Data). Details: `docs/RECONCILIATION_FIXES.md`.

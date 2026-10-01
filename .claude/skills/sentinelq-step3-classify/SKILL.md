@@ -18,3 +18,5 @@ changes are `management_change_routine` (no penalty). See `docs/GOVERNANCE.md`.
 
 **Run / inspect one headline:** `python -m sentinelq inspect label --company "Dr. Reddy's" --headline "..." --date 2026-06-01`  (shows the label and the Step 4 verdict).
 **Manually verify:** `runs/<date>/raw_model_responses.jsonl`, `dropped.jsonl`; labels in `evidence.json`. Never edit a label to change a score - fix the rubric or the prompt, visibly.
+
+**Verification-gate fields:** for governance items the model must also give subject, occurred_at_company, severity, action_stage, amount_inr_cr, event_key and (people items) people_direction + role_tier. Price-only headlines become `price_move`. Try it: `python -m sentinelq inspect label --company ... --headline ...` prints the gate answers and the resulting penalty.

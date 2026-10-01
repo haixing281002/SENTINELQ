@@ -28,6 +28,19 @@ SYSTEM = (
     "(background mention); otherwise false. "
     "about_company is false if the item is NOT actually about the named company (a different entity with a similar "
     "name, a generic market roundup that only lists it, an unrelated topic); when false, use event_type 'other', sentiment 0. "
+    "VERIFICATION GATE - for every item with governance_flag true you MUST also answer: (1) subject = who is the event ABOUT? "
+    "'company' / 'subsidiary' / 'promoter_or_insider' count; 'victim' (the company or a bank was defrauded / cheated), 'lender_or_counterparty', "
+    "'peer_or_sector' (industry-wide rule), 'macro_policy' (customs duty, GST rate, budget, tariff), 'shareholders' (e.g. KYC non-compliant holders) "
+    "NEVER count. (2) occurred_at_company = did it actually happen at THIS company? (3) severity: integrity (SEBI conduct/supervision failure, fraud, auditor "
+    "integrity), material, minor, procedural (tax / customs / labelling / BRSR / disclosure lapses), immaterial (sum under Rs 10 crore and not integrity-type). "
+    "Also give action_stage (order_or_settlement = a final order or settled adjudication; notice_or_demand = a notice / show-cause / demand with NO order yet; "
+    "investigation = a live probe; resolved_or_quashed = withdrawn, quashed or decided in the company's favour; routine = a compliance statement or routine filing), "
+    "amount_inr_cr if a sum is stated (convert lakh/million to crore), and event_key = a short kebab-case id of the underlying real-world event so the "
+    "same event reported on several days gets the SAME key. For people items give people_direction (unplanned_exit only for resignation / termination / "
+    "abrupt exit; appointment, promotion_or_elevation, reappointment and planned succession are NEVER exits) and role_tier. "
+    "HARD RULES: an appointment, promotion or reappointment is never management_exit; macro or sector policy is never company regulatory_action; "
+    "a bank or company that is the victim of fraud is not the subject. "
+    "PRICE RULE: never reason from share-price moves, 52-week highs or sell-offs. An item that is only about the share price is event_type 'price_move' with sentiment 0. "
     "GOVERNANCE TYPES - the penalty depends on picking the right one: "
     "management_exit = an UNPLANNED departure (resignation, termination, abrupt exit) of a CEO, MD, CFO, any 'Chief ... Officer' "
     "(e.g. Chief Product Officer), the Company Secretary or the Compliance Officer. "
@@ -53,13 +66,22 @@ def tool_schema(r: Rubric) -> dict:
         "input_schema": {
             "type": "object",
             "properties": {
-                "event_type": {"type": "string", "enum": r.event_types},
+                "event_type": {"type": "string", "enum": [e for e in r.event_types if e not in r.data.get("reserved_event_types", [])]},
                 "sentiment": {"type": "integer", "minimum": r.sent_min, "maximum": r.sent_max},
                 "rationale": {"type": "string"},
                 "governance_flag": {"type": "boolean"},
                 "materiality": {"type": "string", "enum": r["materiality_levels"]},
                 "historical": {"type": "boolean"},
                 "about_company": {"type": "boolean"},
+                "subject": {"type": "string", "enum": ["company", "subsidiary", "promoter_or_insider", "victim", "lender_or_counterparty",
+                                                       "peer_or_sector", "macro_policy", "shareholders", "other"]},
+                "occurred_at_company": {"type": "boolean"},
+                "action_stage": {"type": "string", "enum": ["order_or_settlement", "notice_or_demand", "investigation", "resolved_or_quashed", "routine", "n/a"]},
+                "severity": {"type": "string", "enum": ["integrity", "material", "minor", "procedural", "immaterial", "n/a"]},
+                "amount_inr_cr": {"type": "number"},
+                "people_direction": {"type": "string", "enum": ["unplanned_exit", "planned_exit_or_succession", "appointment", "promotion_or_elevation", "reappointment", "n/a"]},
+                "role_tier": {"type": "string", "enum": ["cxo_cs_cfo_compliance", "senior_management", "below_cxo", "non_executive_director", "n/a"]},
+                "event_key": {"type": "string"},
             },
             "required": ["event_type", "sentiment", "rationale", "governance_flag", "about_company"],
             "additionalProperties": False,
@@ -182,6 +204,12 @@ class KeywordClassifier:
                 lab = {"event_type": et, "sentiment": s,
                        "rationale": f"Keyword match on '{pat.split('|')[0]}' in headline.",
                        "governance_flag": g, "about_company": True}
+                if g:      # offline stand-in for the verification gate: assume the company is the subject and the matter is material
+                    lab.update(subject="company", occurred_at_company=True, severity="integrity" if et in ("regulatory_action", "auditor_resignation", "auditor_restatement") else "material")
+                    if et in ("management_exit", "management_change_routine"):
+                        lab.update(people_direction="unplanned_exit" if et == "management_exit" else "appointment",
+                                   role_tier="cxo_cs_cfo_compliance" if et == "management_exit" else "senior_management")
+                    lab["action_stage"] = {"regulatory_action": "order_or_settlement", "investigation": "investigation"}.get(et, "routine" if et == "management_change_routine" else "n/a")
                 return lab, json.dumps(lab)
         lab = {"event_type": "other", "sentiment": 0, "rationale": "No taxonomy match in text.",
                "governance_flag": False, "about_company": True}
@@ -191,4 +219,7 @@ class KeywordClassifier:
 def to_label(d: dict) -> Label:
     return Label(d["event_type"], d["sentiment"], d["rationale"], bool(d["governance_flag"]),
                  d.get("materiality"), historical=bool(d.get("historical", False)),
-                 relevant=bool(d.get("about_company", True)))
+                 relevant=bool(d.get("about_company", True)),
+                 subject=d.get("subject"), occurred_at_company=d.get("occurred_at_company"), action_stage=d.get("action_stage"),
+                 severity=d.get("severity"), amount_inr_cr=d.get("amount_inr_cr"), people_direction=d.get("people_direction"),
+                 role_tier=d.get("role_tier"), event_key=d.get("event_key"))

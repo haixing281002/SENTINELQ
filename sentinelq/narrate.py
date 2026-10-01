@@ -21,6 +21,7 @@ SYSTEM = (
     "add no facts from memory. Cite dates in the form 30-Apr-26 and figures exactly as they appear in the evidence. "
     "Write 'Rs' for rupees (never the rupee symbol). If evidence is thin or sources conflict, say so explicitly in the "
     "rationale itself, as a plain statement about coverage (for example 'only two dated items were retrieved'). "
+    "PRICE RULE: never mention share-price moves, 52-week highs, rallies or sell-offs in the sentiment rationale (price is context only; if essential, wrap the sentence in [context]). "
     "STYLE RULES: write the finished report text, never commentary about your inputs - do not say 'the evidence', 'the facts "
     "supplied', 'rows', 'payload' or 'provided'. Never print URLs. Write event types as words ('regulatory action', not "
     "regulatory_action). Write dates without a leading zero (5-Jun-26). Scores are whole numbers (72, not 72.0); never mention "
@@ -70,7 +71,8 @@ def fmt_sent(x):
 def evidence_payload(s: StockScore, items: list[LabelledItem]) -> dict:
     return {
         "company": s.name, "sector": s.sector,
-        "scores": {"sentiment": s.company_sentiment, "governance": int(round(s.governance_score)),
+        "sentiment_status": s.sentiment_note or "ok", "evidence_span": f"{s.evidence_first}..{s.evidence_last}" if s.evidence_first else "none",
+        "scores": {"sentiment": s.company_sentiment if s.company_sentiment is not None else "INSUFFICIENT DATA", "governance": int(round(s.governance_score)),
                    "governance_label": s.governance_label.upper() if s.governance_label == "Flag" else s.governance_label},
         "penalties_applied": [{"event": p["event_type"].replace("_", " "), "penalty": p["penalty"], "date": p["date"],
                                "headline": p["headline"]} for p in s.governance_penalties],
@@ -92,7 +94,9 @@ class Narrator(Protocol):
 
 
 def key_actions(items: list[LabelledItem], limit: int = 3) -> str:
-    acts = [li for li in sorted(items, key=lambda x: x.item.published, reverse=True)
+    from .lint import unique_actions
+    from .rubric import load_rubric
+    acts = [li for li in sorted(unique_actions(items, load_rubric()), key=lambda x: x.item.published, reverse=True)
             if li.label.event_type in CA_TYPES]
     return "; ".join(li.item.title.rstrip(".") for li in acts[:limit]) or "—"
 
@@ -104,7 +108,9 @@ class TemplateNarrator:
         pos = [li for li in news if li.label.sentiment > 0][:3]
         neg = [li for li in news if li.label.sentiment < 0][:3]
         line = lambda li: f"{li.item.title.rstrip('.')} ({li.item.published})"
-        sr = [f"Sentiment {fmt_sent(s.company_sentiment)} (recency-weighted mean {s.company_sentiment_raw}) from {len(news)} dated news item(s)."]
+        sr = ([f"Insufficient data: {s.sentiment_note.replace('INSUFFICIENT DATA: ', '')}. No sentiment score is issued rather than a forced +1 or 0."]
+              if s.company_sentiment is None else
+              [f"Sentiment {fmt_sent(s.company_sentiment)} (recency-weighted mean {s.company_sentiment_raw}) from {len(news)} dated news item(s)."])
         if pos:
             sr.append("Positive evidence: " + "; ".join(line(x) for x in pos) + ".")
         if neg:
@@ -161,22 +167,27 @@ def portfolio_facts(scores: list[StockScore], kept: dict[str, list[LabelledItem]
     dist = Counter(s.company_sentiment for s in scores if s.company_sentiment is not None)
     flags = [s for s in scores if s.governance_label == "Flag"]
     ca = Counter()
+    from .lint import unique_actions
+    from .rubric import load_rubric
+    rub = load_rubric()
     for s in scores:
-        for li in kept.get(s.symbol, []):
+        for li in unique_actions(kept.get(s.symbol, []), rub):          # repeats of one declaration count once
             if li.label.event_type in CA_TYPES:
                 ca[li.label.event_type] += 1
     companies = [{"company": s.name, "sector": s.sector, "sentiment": s.company_sentiment,
                   "governance": int(round(s.governance_score)), "label": s.governance_label,
                   "low_confidence": s.low_confidence,
                   "penalties": [{"event": p["event_type"].replace("_", " "), "penalty": p["penalty"], "date": p["date"]} for p in s.governance_penalties],
-                  "corporate_actions": [li.item.title for li in kept.get(s.symbol, []) if li.label.event_type in CA_TYPES][:4]}
+                  "corporate_actions": [li.item.title for li in unique_actions(kept.get(s.symbol, []), rub) if li.label.event_type in CA_TYPES][:4]}
                  for s in scores]
     return {"n": len(scores), "companies": companies, "sentiment_distribution": {str(k): v for k, v in sorted(dist.items(), reverse=True)},
             "flags": [{"company": s.name, "sector": s.sector, "score": s.governance_score,
                        "penalties": [(p["event_type"], p["penalty"], p["date"]) for p in s.governance_penalties]} for s in flags],
             "watch": [s.name for s in scores if s.governance_label == "Watch"],
             "corporate_action_counts": dict(ca),
-            "low_confidence": [s.name for s in scores if s.low_confidence]}
+            "low_confidence": [s.name for s in scores if s.low_confidence],
+            "insufficient_data": [s.name for s in scores if s.company_sentiment is None],
+            "window_collapsed": [s.name for s in scores if s.sentiment_note.startswith("EVIDENCE WINDOW COLLAPSED")]}
 
 
 def default_observations(f: dict) -> list[dict]:
@@ -192,6 +203,11 @@ def default_observations(f: dict) -> list[dict]:
     if f["corporate_action_counts"]:
         obs.append({"title": "Corporate-action activity.",
                     "body": ", ".join(f"{v} {k.replace('_', ' ')}" for k, v in f["corporate_action_counts"].items()) + " identified in the window."})
+    if f.get("insufficient_data"):
+        obs.append({"title": "Insufficient data is reported, not forced.", "body": "No sentiment score is issued for " + ", ".join(f["insufficient_data"]) +
+                    " because the minimum evidence standard (at least 8 relevant articles including a results print) was not met."})
+    if f.get("window_collapsed"):
+        obs.append({"title": "Evidence window.", "body": "For " + ", ".join(f["window_collapsed"]) + " the retrieved articles cover only a short part of the 12-month lookback; read those scores with caution."})
     if f["low_confidence"]:
         obs.append({"title": "Coverage gaps are stated per stock.", "body": "Sparse retrieval (low confidence): " + ", ".join(f["low_confidence"]) + "."})
     return obs

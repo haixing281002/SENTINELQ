@@ -14,3 +14,5 @@ Run folder: `runs/<as-of date>/`. Work through it in this order:
 7. `audit/manifest.json` - sha256 of every output file, code version/commit, rubric hash.
 Live view while running: the display tags every line `[STEP n/6 NAME]` and shows a per-stock step tracker; the same text goes to `work/run.log` (`tail -f`).
 Conformance with the architecture document: `docs/PIPELINE_CONFORMANCE.md`.
+
+Two runs disagree or a person verified an event: use `sentinelq-reconcile` (`merge`, `portfolio/verified_events.csv`).

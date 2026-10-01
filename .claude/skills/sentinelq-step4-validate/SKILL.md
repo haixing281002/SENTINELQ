@@ -13,3 +13,5 @@ with a logged reason - never silent, never passed through. Dropped counts appear
 **Failure gates:** >10% label failures stops the run before any report (override `--allow-partial-labels`).
 **Inspect:** `python -m sentinelq inspect label ...` prints PASS or `DROP: reason`.
 **Manually verify:** `runs/<date>/dropped.jsonl` (every drop + reason), Coverage sheet of the xlsx, `RUN_RECORD.md` Step 4 table, `label_failures.jsonl` if any.
+
+**New gates:** governance items missing the verification answers fail as `incomplete_governance_verification:<field>` (retried once, then dropped with the reason); the price-language lint relabels price-only headlines.

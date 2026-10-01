@@ -28,12 +28,29 @@ def weighted_sentiment(items: list[LabelledItem], as_of: date, r: Rubric) -> flo
     """Recency-weighted mean of ordinal sentiments (news only)."""
     num = den = 0.0
     for li in items:
-        if li.item.kind != "news" or li.item.purpose != "sentiment":
-            continue
+        if li.item.kind != "news" or li.item.purpose != "sentiment" or li.label.event_type == "price_move":
+            continue        # price-only items never feed sentiment (Reconciliation fix 5)
         w = recency_weight(li.item.published, as_of, r)
         num += w * li.label.sentiment
         den += w
     return num / den if den else None
+
+
+def evidence_standard(items: list[LabelledItem], as_of: date, r: Rubric) -> dict:
+    """Minimum evidence standard (Reconciliation fix 6): below N relevant articles, or with no results print in the window,
+    sentiment is 'Insufficient Data' rather than a forced +1 or 0. Also measures how much of the lookback the evidence really covers."""
+    c = r["sentiment"]
+    rel = [li for li in items if li.item.kind == "news" and li.item.purpose == "sentiment" and li.label.event_type != "price_move"]
+    results = [li for li in rel if li.label.event_type in c["results_event_types"]]
+    dates = sorted(li.item.published for li in rel if li.item.published)
+    span = (date.fromisoformat(dates[-1]) - date.fromisoformat(dates[0])).days if dates else None
+    why = ""
+    if len(rel) < c["min_relevant_articles"]:
+        why = f"only {len(rel)} relevant article(s) (minimum {c['min_relevant_articles']})"
+    elif c["require_results_print"] and not results:
+        why = "no results / earnings / guidance item in the 12-month window"
+    return {"n": len(rel), "results": len(results), "first": dates[0] if dates else "", "last": dates[-1] if dates else "",
+            "span": span, "insufficient": why, "collapsed": span is not None and span < c["min_span_days"]}
 
 
 def _penalty(pen, lab):
@@ -46,14 +63,14 @@ def _penalty(pen, lab):
 _EXIT_WORDS = re.compile(r"resign|quit|steps? down|stepped down|exit|terminat|sacked|removed|ousted|abrupt|dismiss|relieved|fired", re.I)
 _BENIGN_PEOPLE = re.compile(r"elevat|promot|re-?designat|appointed as|appoints|appointment of|named (as )?(the )?head|takes? charge|"
                             r"assum(es|ed) charge|superannuat|retire|retirement|succession|completion of (his|her|the) (term|tenure)|"
-                            r"transition|move[sd]? to|to head|new role|additional charge", re.I)
+                            r"transition|move[sd]? to|to head|new role|additional charge|appointed|reappoint|\\bhires?\\b|\\bhired\\b|incoming|joins as|succe(ed|ssor)", re.I)
 _C_SUITE = re.compile(r"\b(ceo|cfo|cto|coo|cio|cmo|cpo|md|chief [a-z&/ ,-]{2,40} officer|chief executive|managing director|"
                       r"company secretary|compliance officer)\b", re.I)
 
 
 def literal_rule_override(li: LabelledItem) -> str | None:
-    """Safety net behind the model: a 'management_exit' label is only a penalty if the item really is an UNPLANNED exit of
-    a CXO / CS / CFO / compliance officer. Returns the reason to NOT penalise, else None."""
+    """Text-level safety net behind the model for people items: a 'management_exit' is only a penalty if it really is an UNPLANNED exit of
+    a CXO / CS / CFO / compliance officer. Returns the reason NOT to penalise, else None."""
     lab = li.label
     text = f"{li.item.title}. {lab.rationale}"
     if lab.event_type != "management_exit":
@@ -68,52 +85,181 @@ def literal_rule_override(li: LabelledItem) -> str | None:
     return None
 
 
-def governance(items: list[LabelledItem], r: Rubric) -> tuple[float, str, list[dict]]:
-    """Start at 100; fixed penalties per event type (once per type). Background mentions of
-    out-of-window events earn one flat memory discount, never double-counted with an in-window
-    penalty of the same type."""
+_MACRO = re.compile(r"customs duty|import duty|duty hike|gst (rate|council|cut|hike)|union budget|\bbudget\b|tariff|rbi (repo|rate)|monetary policy|"
+                    r"sector[- ]wide|industry[- ]wide|all (companies|manufacturers|banks)|new rules? for|tightens? (rules|norms)|(rules|norms) (tightened|tighten)|cough[- ]syrup", re.I)
+_VICTIM = re.compile(r"(arrest|booked|held|nabbed).{0,60}(cheat|defraud|fraud).{0,60}\b(bank|company)\b|\bbank (was )?(cheated|defrauded)|appraisers? (arrested|cheat)", re.I)
+
+
+def _norm_key(k: str | None) -> str:
+    return re.sub(r"[^a-z0-9]", "", (k or "").lower())
+
+
+def _tokens(t: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z0-9]{4,}", t.lower())}
+
+
+_STOP = {"over", "with", "from", "that", "this", "into", "after", "have", "will", "been", "company", "limited", "india", "indian", "news", "issues",
+         "announces", "says", "report", "reports", "notice", "probe", "begins", "launches"}
+
+
+def same_event(a: LabelledItem, b: LabelledItem, own_tokens: set[str], days: int) -> bool:
+    """Same real-world event? Same family, within `days`, and the same key - or at least two distinctive words in common (the company's
+    own name and generic words are ignored), covering at least half of the shorter description. Catches Nestle: 'FSSAI notice ... Maggi' on
+    14-Jun and 'FSSAI probe ... Maggi' on 15-Jun are ONE event."""
+    if _family(a.label.event_type) != _family(b.label.event_type):
+        return False
+    try:
+        if abs((date.fromisoformat(a.item.published) - date.fromisoformat(b.item.published)).days) > days:
+            return False
+    except ValueError:
+        return False
+    ka, kb = _norm_key(a.label.event_key), _norm_key(b.label.event_key)
+    if ka and ka == kb:
+        return True
+    def words(li):
+        return (_tokens(li.item.title) | _tokens((li.label.event_key or "").replace("-", " "))) - own_tokens - _STOP
+    wa, wb = words(a), words(b)
+    shared = wa & wb
+    return len(shared) >= 2 and len(shared) / max(min(len(wa), len(wb)), 1) >= 0.5
+
+
+_FAMILY = {"regulatory_action": "regulatory", "investigation": "regulatory", "exchange_fine": "regulatory", "litigation": "regulatory",
+           "management_exit": "people", "board_independence": "people", "auditor_resignation": "auditor", "auditor_restatement": "auditor",
+           "rpt_concern": "rpt"}
+
+
+def _family(et: str) -> str:
+    return _FAMILY.get(et, et)
+
+
+def gate(li: LabelledItem, r: Rubric) -> tuple[float | None, str, str]:
+    """The governance VERIFICATION GATE (Reconciliation fix 2). Returns (penalty or None, why-not or basis, bucket).
+    Answers, before any penalty: is the company the subject? did it happen there? how severe? - and applies the written-down conventions."""
     g = r["governance"]
-    pen = g["penalties"]
-    score, applied, seen = float(g["start"]), [], set()
+    c = g["conventions"]
+    lab, it = li.label, li.item
+    base = _penalty(g["penalties"], lab)
+    if it.penalty_override is not None:                          # a human set the weight on verified evidence: recorded, not second-guessed
+        return float(it.penalty_override), f"human-set weight ({it.verified or 'verified'}; {it.source_ref or 'see evidence'})", "override"
+    if base is None:
+        return None, g.get("routine_types", {}).get(lab.event_type, "no penalty for this type"), "routine"
+    text = f"{it.title}. {lab.rationale}"
+    # 1. subject: the company must be the subject (not victim / lender / peer / sector / macro / shareholders)
+    if lab.subject and lab.subject not in c["subject_ok"]:
+        return None, f"subject is {lab.subject.replace('_', ' ')}, not the company - " + c["subject_never_penalised"].get(lab.subject, ""), "subject"
+    if lab.occurred_at_company is False:
+        return None, "the event did not occur at the company", "subject"
+    if lab.event_type in ("regulatory_action", "investigation", "exchange_fine") and _VICTIM.search(it.title):
+        return None, "the company is the victim, not the subject", "subject"
+    if lab.event_type == "regulatory_action" and _MACRO.search(it.title) and not re.search(r"\b(sebi|rbi|nse|bse|order|penalt|fined?|settle)", it.title, re.I):
+        return None, "macro / sector policy is never company regulatory action", "subject"
+    if lab.event_type == "regulatory_action" and lab.subject in ("peer_or_sector", "macro_policy"):
+        return None, "macro / sector policy is never company regulatory action", "subject"
+    # 2. people items: direction and tier
+    if lab.event_type == "management_exit":
+        why = literal_rule_override(li)
+        if why:
+            return None, why, "people"
+        if lab.people_direction in c["people_never_an_exit"]:
+            return None, f"{lab.people_direction.replace('_', ' ')} is never a management exit", "people"
+        if lab.role_tier and lab.role_tier != c["exit_requires_role_tier"]:
+            return None, f"{lab.role_tier.replace('_', ' ')}: below CXO / CS / CFO / compliance tier", "people"
+    # 3. stage: resolved / routine matters are not a live overhang
+    if lab.action_stage == "resolved_or_quashed":
+        return None, c["resolved_never_penalised"], "resolved"
+    if lab.action_stage == "routine" and lab.event_type != "management_exit":
+        return None, "a routine compliance statement or filing, not an adverse event", "routine"
+    p = base
+    basis = f"{lab.event_type} base {base:+g}"
+    # 4. a notice / demand with no order is an overhang (-10), not an order or settlement (-20)
+    if lab.event_type == "regulatory_action" and lab.action_stage == "notice_or_demand":
+        p = max(p, c["notice_without_order_penalty"])
+        basis = f"notice or demand with no order -> overhang {p:+g}"
+    # 5. severity caps and the materiality floor (integrity-type matters are exempt)
+    if lab.event_type not in c["severity_caps_exempt_types"]:
+        cap = c["severity_caps"].get(lab.severity or "")
+        if cap is not None:
+            p = max(p, cap)
+            basis += f"; severity {lab.severity} caps at {cap:+g}"
+        if lab.severity != "integrity" and lab.amount_inr_cr is not None and lab.amount_inr_cr < c["materiality_floor_cr"]:
+            p = max(p, c["procedural_band_penalty"])
+            basis += f"; Rs {lab.amount_inr_cr:g} cr is under the Rs {c['materiality_floor_cr']:g} cr floor -> procedural band {c['procedural_band_penalty']:+g}"
+    return p, basis, "penalty"
+
+
+def governance(items: list[LabelledItem], r: Rubric, company_name: str = "") -> tuple[float, str, list[dict]]:
+    """Start at 100. Every governance-flagged item passes the verification gate; survivors are de-duplicated by real-world event
+    (same event_key, or the same event reported within `dedupe_days`), then fixed penalties apply once per type. The -5 memory discount
+    for out-of-window events applies only if NO in-window penalty exists. Items deliberately not penalised are kept, with the reason."""
+    g = r["governance"]
+    c = g["conventions"]
+    score, applied = float(g["start"]), []
     historical = []
-    ignored = governance.ignored = []      # (read by score_portfolio) items flagged but deliberately not penalised
+    ignored = governance.ignored = []      # read by score_portfolio: flagged but deliberately not penalised, with the reason
+
+    def skip(li, why):
+        ignored.append({"event_type": li.label.event_type, "date": li.item.published, "headline": li.item.title, "url": li.item.url,
+                        "source_ref": li.item.source_ref, "why": why})
+
+    cands = []
     for li in sorted(items, key=lambda x: x.item.published):
         lab = li.label
-        if not lab.governance_flag or _penalty(pen, lab) is None:
-            if lab.governance_flag and lab.event_type in g.get("routine_types", {}):
-                ignored.append({"event_type": lab.event_type, "date": li.item.published, "headline": li.item.title,
-                                "url": li.item.url, "why": g["routine_types"][lab.event_type]})
+        if not lab.governance_flag:
             continue
-        why_not = literal_rule_override(li)
-        if why_not:
-            ignored.append({"event_type": lab.event_type, "date": li.item.published, "headline": li.item.title,
-                            "url": li.item.url, "why": why_not})
+        p, why, bucket = gate(li, r)
+        if p is None:
+            skip(li, why)               # flagged but not penalised: always recorded with the reason
             continue
-        if lab.historical:
+        if lab.historical and li.item.penalty_override is None:
             historical.append(li)
             continue
-        if g["count_mode"] == "once_per_type" and lab.event_type in seen:
+        cands.append((li, p, why))
+
+    # same-event de-duplication: one real-world event is ONE event, whatever number of days / types it was reported as
+    cands.sort(key=lambda x: x[1])                                            # most severe first
+    kept: list[tuple] = []
+    own = _tokens(company_name) | {w for w in _tokens(" ".join(x.item.symbol for x, _, _ in cands))}
+    for li, p, why in cands:
+        dup = None
+        for kli, kp, _ in kept:
+            if same_event(li, kli, own, c["dedupe_days"]):
+                dup = kli
+                break
+        if dup:
+            skip(li, f"same event as '{dup.item.title[:70]}' ({dup.item.published}) - counted once, at the most severe weight")
             continue
-        seen.add(lab.event_type)
-        p = _penalty(pen, lab)
+        kept.append((li, p, why))
+
+    seen_types = set()
+    for li, p, why in sorted(kept, key=lambda x: (x[0].item.penalty_override is None, x[0].item.published)):   # human-weighted first
+        et = li.label.event_type
+        if g["count_mode"] == "once_per_type" and et in seen_types and li.item.penalty_override is None:
+            skip(li, f"a second {et.replace('_', ' ')} - each event type is penalised once")
+            continue
+        seen_types.add(et)
         score += p
-        applied.append({"event_type": lab.event_type, "penalty": p, "date": li.item.published,
-                        "headline": li.item.title, "url": li.item.url})
-    memory = [li for li in historical if li.label.event_type not in seen]
-    if memory:
+        applied.append({"event_type": et, "penalty": p, "date": li.item.published, "headline": li.item.title, "url": li.item.url,
+                        "source_ref": li.item.source_ref, "verified": li.item.verified, "basis": why})
+
+    # memory discount: only when nothing in the window was penalised (Reconciliation fix 3)
+    memory = [li for li in historical if li.label.event_type not in {a["event_type"] for a in applied}]
+    if memory and (not c.get("memory_discount_only_if_no_in_window_penalty") or not any(a["event_type"] != "mnc_structural_discount" for a in applied)):
         li = memory[-1]
         score += g["historical_penalty"]
-        applied.append({"event_type": "historical (" + li.label.event_type + ")",
-                        "penalty": g["historical_penalty"], "date": li.item.published,
-                        "headline": li.item.title, "url": li.item.url})
+        applied.append({"event_type": "historical (" + li.label.event_type + ")", "penalty": g["historical_penalty"], "date": li.item.published,
+                        "headline": li.item.title, "url": li.item.url, "source_ref": "", "verified": "", "basis": "memory discount - no in-window penalty exists"})
+    elif memory:
+        for li in memory:
+            skip(li, "out-of-window event: memory discount not applied because an in-window penalty exists")
     label = next(x["label"] for x in g["labels"] if score >= x["min"])
     return score, label, applied
 
 
 def corporate_actions(items: list[LabelledItem], r: Rubric) -> tuple[float, list[dict]]:
     ca = r["corporate_actions"]
+    from .lint import unique_actions
     total, detail = 0.0, []
-    for li in items:
+    for li in unique_actions(items, r):          # repeat headlines of one declaration are ONE action
         lab = li.label
         if lab.event_type not in ca["base"]:
             continue
@@ -146,20 +292,30 @@ def score_portfolio(holdings: list[Holding], by_symbol: dict[str, list[LabelledI
     for h in holdings:
         items = by_symbol.get(h.symbol, [])
         cs = weighted_sentiment(items, as_of, r)
-        g_score, g_label, pens = governance(items, r)
+        ev = evidence_standard(items, as_of, r)
+        if ev["insufficient"]:
+            cs = None                                                     # Insufficient Data - never a forced +1 / 0
+        g_score, g_label, pens = governance(items, r, h.name + " " + h.aliases.replace("|", " "))
         g_ignored = list(governance.ignored)
         ca_score, ca_detail = corporate_actions(items, r)
         n_news = sum(1 for i in items if i.item.kind == "news" and i.item.purpose == "sentiment")
         low = n_news < r["confidence"]["low_below_items"]
         pen_txt = ", ".join(f"{p['event_type']} {p['penalty']:+g}" for p in pens) or "none"
+        note = ("INSUFFICIENT DATA: " + ev["insufficient"]) if ev["insufficient"] else ""
+        if ev["collapsed"] and not ev["insufficient"]:
+            note = f"EVIDENCE WINDOW COLLAPSED: articles span only {ev['span']} days ({ev['first']}..{ev['last']}) of the 12-month lookback"
+        low = low or bool(ev["insufficient"]) or ev["collapsed"]
         rat = (f"Governance = {r['governance']['start']} with penalties [{pen_txt}] = {g_score:g} ({g_label}). "
-               f"Sentiment from {n_news} news item(s), half-life {r['sentiment']['half_life_trading_days']} trading days."
-               + (" LOW CONFIDENCE: sparse coverage." if low else ""))
-        out.append(StockScore(h.symbol, h.name, h.sector, to_integer(cs),
-                              None if cs is None else round(cs, 3),
-                              None if sector_sent.get(h.sector) is None else round(sector_sent[h.sector], 2),
-                              g_score, g_label, pens, round(ca_score, 2), ca_detail,
-                              len(items), dropped_counts.get(h.symbol, 0), low, rat, h.cap, h.weight, g_ignored))
+               f"Sentiment from {ev['n']} relevant news item(s), half-life {r['sentiment']['half_life_trading_days']} trading days."
+               + (f" {note}." if note else "") + (" LOW CONFIDENCE." if low else ""))
+        out.append(StockScore(
+            symbol=h.symbol, name=h.name, sector=h.sector, company_sentiment=to_integer(cs),
+            company_sentiment_raw=None if cs is None else round(cs, 3),
+            sector_sentiment=None if sector_sent.get(h.sector) is None else round(sector_sent[h.sector], 2),
+            governance_score=g_score, governance_label=g_label, governance_penalties=pens, corporate_action_score=round(ca_score, 2),
+            corporate_action_detail=ca_detail, n_items=len(items), n_dropped=dropped_counts.get(h.symbol, 0), low_confidence=low,
+            rationale=rat, cap=h.cap, weight=h.weight, sentiment_note=note, relevant_articles=ev["n"], evidence_first=ev["first"],
+            evidence_last=ev["last"], evidence_span_days=ev["span"], governance_ignored=g_ignored))
     return out
 
 

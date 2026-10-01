@@ -10,7 +10,7 @@ from .rubric import load_rubric
 def main(argv=None):
     import sys
     args = sys.argv[1:] if argv is None else list(argv)
-    if args and args[0] in ("inspect", "verify", "render"):      # manual-verification tools (see tools.py)
+    if args and args[0] in ("inspect", "verify", "render", "merge"):      # manual-verification tools (see tools.py)
         from .tools import main as tools_main
         raise SystemExit(tools_main(args))
     p = argparse.ArgumentParser(prog="sentinelq", description="Sentinel Q pipeline")
@@ -25,8 +25,8 @@ def main(argv=None):
     p.add_argument("--classifier", choices=["claude-code", "file", "anthropic", "keyword"], default="claude-code",
                    help="claude-code: local `claude -p`, no API key (default); file: hand-off files; anthropic: API key; keyword: offline stub")
     p.add_argument("--model", default=None, help="Anthropic model id (or env SENTINELQ_MODEL)")
-    p.add_argument("--news", choices=["gnews", "gdelt", "file"], default="gnews",
-                   help="gnews = free Google News RSS (default, fast); gdelt = free GDELT DOC API; file = your own JSON. Both roll back newest-first until enough articles")
+    p.add_argument("--news", choices=["auto", "gnews", "gdelt", "file"], default="auto",
+                   help="auto (default) = gdelt for a past as-of date (dated archive) else gnews; gnews = Google News RSS (LIVE index); gdelt = GDELT DOC API; file = your own JSON")
     p.add_argument("--gdelt-slice-days", type=int, default=90, help="DOC API window size in days (max useful is 90)")
     p.add_argument("--news-file")
     p.add_argument("--actions", choices=["yahoo", "file", "none"], default="yahoo")
@@ -46,6 +46,13 @@ def main(argv=None):
     p.add_argument("--log", default="work/run.log", help="plain-text copy of the run display (tail -f it)")
     p.add_argument("--ascii", action="store_true", help="ASCII bars (#---) instead of block characters")
     p.add_argument("--allow-missing-news", action="store_true", help="continue even if news fetch failed for some stocks")
+    p.add_argument("--allow-live-backdate", action="store_true", help="allow a LIVE news index with a past as-of date (stamped 'not a point-in-time backtest')")
+    p.add_argument("--confirm-universe", action="store_true", help="accept a changed stock list (otherwise a change since the last confirmed run refuses to run)")
+    p.add_argument("--expect-count", type=int, default=None, help="refuse to run unless the stock list has exactly this many stocks")
+    p.add_argument("--verified-events", default="portfolio/verified_events.csv", help="human-verified evidence merged before scoring (union-then-rescore)")
+    p.add_argument("--no-verified-events", action="store_true")
+    p.add_argument("--no-fundamentals-pass", action="store_true", help="skip the 12-month results-type search that anchors sentiment")
+    p.add_argument("--fundamentals-cap", type=int, default=40, help="max results-type articles per stock from the 12-month pass")
     p.add_argument("--no-governance-pass", action="store_true", help="skip the separate 12-month governance-keyword search")
     p.add_argument("--governance-cap", type=int, default=30, help="max governance-candidate articles per stock from the 12-month pass")
     p.add_argument("--no-prefilter", action="store_true", help="send generic market-roundup headlines to the model too")
@@ -60,6 +67,8 @@ def main(argv=None):
     r = load_rubric(a.rubric)
     as_of = date.fromisoformat(a.as_of) if a.as_of else date.today()
 
+    from .retrieval import resolve_news_source
+    a.news, retrieval_mode = resolve_news_source(a.news, as_of, date.today(), r["retrieval"]["backdate_days"], a.allow_live_backdate)
     if a.news == "file":
         news = FileNews(a.news_file)
     elif a.news == "gnews":
@@ -124,14 +133,19 @@ def main(argv=None):
         holdings = load_portfolio(a.portfolio)
     else:
         p.error("give --portfolio or --pick")
+    from .resolve import enrich
+    from .universe import check_universe
+    holdings = enrich(holdings, a.universe, mode="none" if a.classifier in ("keyword", "file") else "claude-code", model=a.model)
+    uhash, umsg = check_universe(str(a.portfolio or a.pick), [h.symbol for h in holdings], r["universe"]["lock_file"], a.confirm_universe, a.expect_count)
+    print("  [universe] " + umsg)
     pipe = Pipeline(r, news, actions, prices, clf, out, a.cache, as_of, a.mode,
                     narrator, a.title, a.coverage, a.max_articles, a.fetch_text,
                     1.01 if a.allow_partial_labels else 0.10, ui=ui,
-                    allow_missing_news=a.allow_missing_news, prefilter=not a.no_prefilter,
+                    allow_missing_news=a.allow_missing_news, prefilter=not a.no_prefilter, retrieval_mode=retrieval_mode,
+                    verified_events=None if a.no_verified_events else a.verified_events, universe_hash=uhash,
                     governance_pass=not a.no_governance_pass, governance_cap=a.governance_cap,
+                    fundamentals_pass=not a.no_fundamentals_pass, fundamentals_cap=a.fundamentals_cap,
                     disk_cache=not a.no_disk_cache)
-    from .resolve import enrich
-    holdings = enrich(holdings, a.universe, mode="none" if a.classifier in ("keyword", "file") else "claude-code", model=a.model)
     ingested = None
     if a.classifier == "file":
         ingested = pipe.ingest(holdings)

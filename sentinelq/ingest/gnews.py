@@ -149,6 +149,24 @@ class GoogleNewsRSS:
                 break
         return dedupe_by_url(items)
 
+    def fetch_fundamentals(self, h: Holding, start: date, end: date) -> list[RawItem]:
+        """Results-type search across the WHOLE lookback in 90-day blocks, so full-year results prints are read even when the latest-N pull is all recent."""
+        from .select import FUND_QUERY
+        items: list[RawItem] = []
+        saved = self.marks
+        self.marks = (90, 180, 270, 365)
+        try:
+            wins = list(self._windows(start, end))
+        finally:
+            self.marks = saved
+        for lo, hi in wins:
+            rows = parse_feed(self._get(self._url(self._query(h, lo, hi, FUND_QUERY)), f"{h.symbol} results {lo}..{hi}"))[: self.max_items]
+            for r in rows:
+                if r["date"] and lo <= r["date"] <= hi:
+                    items.append(RawItem(h.symbol, "news", r["title"], "", r["url"], r["date"].isoformat(), r["source"], origin="fundamentals"))
+        self._say(f"[GoogleNews] {h.symbol} results pass: {len(items)} candidate articles over {start}..{end}")
+        return dedupe_by_url(items)
+
     def fetch_governance(self, h: Holding, start: date, end: date) -> list[RawItem]:
         """Second, independent search across the WHOLE lookback with governance keywords (leadership + regulatory), so a CXO exit
         or regulatory order from months ago is found even when the latest-N headlines are all about something else."""

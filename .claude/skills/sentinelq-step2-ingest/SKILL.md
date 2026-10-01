@@ -20,3 +20,5 @@ never a score). Every item carries its source URL and publication date from the 
 
 **Manually verify:** `runs/<date>/audit/queries.jsonl` lists every request URL; `RUN_RECORD.md` Step 2 table shows requests, retrieved, governance-pass counts.
 Google News links are redirect URLs (they open the publisher) - they cite the source but cannot be fetched for body text.
+
+**Three passes per stock (Reconciliation s7):** latest-N sentiment pull; a 12-month **results** pass (so full-year prints are read); a 12-month **governance** pass. Past as-of date: `--news auto` uses the dated archive; a live index is refused or stamped. See `docs/RECONCILIATION_FIXES.md`.

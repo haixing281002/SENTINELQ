@@ -22,7 +22,7 @@ from concurrent.futures import ThreadPoolExecutor
 from .narrate import TemplateNarrator, portfolio_facts
 from .progress import Display
 from .style import classify_style
-from .ingest.select import count_usable, month_spark, name_tokens, select_articles, select_governance
+from .ingest.select import count_usable, month_spark, name_tokens, select_articles, select_fundamentals, select_governance
 from .pdf import build_pdf
 from .report import write_reports
 from .rubric import Rubric
@@ -92,7 +92,9 @@ class Pipeline:
                  max_label_failure: float = 0.10,
                  text_cache=None, ui: Display | None = None,          # text_cache: ignored (articles are never cached)
                  allow_missing_news: bool = False, ingest_retry_wait: float = 60.0, prefilter: bool = True,
-                 disk_cache: bool = True, governance_pass: bool = True, governance_cap: int = 30):
+                 disk_cache: bool = True, governance_pass: bool = True, governance_cap: int = 30,
+                 fundamentals_pass: bool = True, fundamentals_cap: int = 40, retrieval_mode: str = "live", run_date: date | None = None,
+                 verified_events: str | Path | None = None, universe_hash: str = ""):
         self.r, self.news, self.actions, self.prices, self.clf = rubric, news, actions, prices, classifier
         self.out = Path(out_dir)
         self.cache = LabelCache(cache_path if disk_cache else None)   # label cache holds hash -> label only, no article text
@@ -102,6 +104,8 @@ class Pipeline:
         self.max_label_failure = max_label_failure
         self.fetch_text = fetch_text
         self.governance_pass, self.governance_cap = governance_pass, governance_cap
+        self.fundamentals_pass, self.fundamentals_cap = fundamentals_pass, fundamentals_cap
+        self.retrieval_mode, self.run_date, self.verified_events, self.universe_hash = retrieval_mode, run_date or date.today(), verified_events, universe_hash
         self.narrator = narrator or TemplateNarrator()
         self.meta = {"title": title, "coverage": coverage}
         self.ui = ui or Display("off")
@@ -126,6 +130,12 @@ class Pipeline:
                 errs.append({"symbol": h.symbol, "provider": type(prov).__name__, "error": repr(e)})
         found = len([i for i in items if i.kind == "news"])
         items = select_articles(items, self.max_articles, toks)      # the LATEST max_articles usable ones (sentiment pass)
+        if self.fundamentals_pass and hasattr(self.news, "fetch_fundamentals") and not errs:
+            try:    # sentiment must rest on the whole lookback incl. results prints, not only the latest weeks (Reconciliation cause 1)
+                fund = self.news.fetch_fundamentals(h, self.as_of - timedelta(days=w["news_days"]), self.as_of)
+                items += select_fundamentals(fund, items, 10, self.fundamentals_cap, toks, self.as_of)
+            except Exception as e:
+                errs.append({"symbol": h.symbol, "provider": type(self.news).__name__ + ".fundamentals", "error": repr(e)})
         if self.governance_pass and hasattr(self.news, "fetch_governance") and not errs:
             try:    # governance is a 12-month rubric: search the whole year for governance events, independent of the latest-N pull
                 gov = self.news.fetch_governance(h, self.as_of - timedelta(days=w["news_days"]), self.as_of)
@@ -257,6 +267,9 @@ class Pipeline:
                 "prices_source": type(self.prices).__name__ if self.prices else None, "max_articles_per_stock": self.max_articles,
                 "governance_pass": self.governance_pass, "governance_cap": self.governance_cap, "full_text": self.fetch_text,
                 "generic_headline_prefilter": self.prefilter, "as_of": self.as_of.isoformat(), "mode": self.mode,
+                "retrieval_mode": self.retrieval_mode, "run_date": self.run_date.isoformat(), "universe_hash": self.universe_hash[:12],
+                "fundamentals_pass": self.fundamentals_pass, "fundamentals_cap": self.fundamentals_cap,
+                "verified_events_file": str(self.verified_events) if self.verified_events else "",
                 "classifier": self.clf.model_id, "schema_enforced": bool(getattr(self.clf, "use_schema", False)),
                 "max_label_failure_rate": self.max_label_failure, "allow_missing_news": self.allow_missing_news,
                 "label_cache_on_disk": bool(self.cache.path)}
@@ -308,8 +321,14 @@ class Pipeline:
             if reason:
                 dropped.append(Dropped(h.symbol, it.title, it.url, it.published, "validate", reason))
                 continue
-            kept.append(LabelledItem(it, to_label(label_d), resp, cached, attempts))
-            ev[label_d["event_type"]] += 1
+            li = LabelledItem(it, to_label(label_d), resp, cached, attempts)
+            from .lint import price_only
+            if it.kind == "news" and li.label.event_type != "price_move" and price_only(it.title, self.r):
+                # Reconciliation fix 5: an item that is only about the share price is not sentiment evidence
+                li.label.event_type, li.label.sentiment, li.label.governance_flag = "price_move", 0, False
+                li.label.rationale = "Price-language lint: headline is only about the share price - excluded from sentiment."
+            kept.append(li)
+            ev[li.label.event_type] += 1
         ui.stock_validated(h, len(kept), len(items), Counter(d.reason.split(":")[0] for d in dropped), ev, None)
         for it in items:                      # the article text has served its purpose: release it
             it.snippet = ""
@@ -332,7 +351,9 @@ class Pipeline:
         ui = self.ui
         ui.start({"as of": self.as_of, "classifier": self.clf.model_id, "max articles": self.max_articles or "all",
                   "full text": "on (read in memory, never saved)" if self.fetch_text else "off (headline only)",
-                  "articles stored": "none (headline+URL kept only in the report)", "output": self.out}, holdings)
+                  "articles stored": "none (headline+URL kept only in the report)",
+                  "retrieval": self.retrieval_mode + (" - NOT a point-in-time backtest" if self.retrieval_mode == "live_index_backdated" else ""),
+                  "output": self.out}, holdings)
         if ingested is not None:
             raw, ingest_errors = ingested
             kept, dropped, raw_log = self.classify_and_validate(holdings, raw)
@@ -351,6 +372,17 @@ class Pipeline:
                 kept[h.symbol] = k
                 dropped += d
                 raw_log += r_
+        verified_info = {"file": str(self.verified_events) if self.verified_events else "", "applied": [], "skipped": []}
+        if self.verified_events and Path(self.verified_events).exists():     # union-then-rescore (Reconciliation fix 7)
+            from .verified import load_verified
+            vit, vskip = load_verified(self.verified_events, self.as_of, self.r["windows"]["news_days"], {h.symbol for h in holdings})
+            for li in vit:
+                kept[li.item.symbol].append(li)
+            verified_info["applied"] = [{"symbol": li.item.symbol, "headline": li.item.title, "status": li.item.verified, "weight": li.item.penalty_override,
+                                         "source": li.item.source_ref} for li in vit]
+            verified_info["skipped"] = vskip
+            ui.note(f"  human-verified evidence merged: {len(vit)} event(s) applied, {len(vskip)} not applicable at this as-of date "
+                    f"({sum(1 for v in vit if v.item.verified == 'provisional')} provisional) - re-scored once under the one rubric", "d")
         failed = [d for d in dropped if d.reason.startswith("label_failed")]
         labelable = sum(1 for v in raw.values() for i in v if i.url.strip()) or 1
         if failed:
@@ -385,28 +417,44 @@ class Pipeline:
                      "news_kept": sum(1 for i in kept[h.symbol] if i.item.kind == "news"),
                      "label_failed": sum(1 for d in dropped if d.symbol == h.symbol and d.reason.startswith("label_failed")),
                      "actions_kept": sum(1 for i in kept[h.symbol] if i.item.kind == "action"),
-                     "low_confidence": next(s.low_confidence for s in scores if s.symbol == h.symbol)}
+                     "low_confidence": next(s.low_confidence for s in scores if s.symbol == h.symbol),
+                     "relevant_articles": next(s.relevant_articles for s in scores if s.symbol == h.symbol),
+                     "span_days": next(s.evidence_span_days for s in scores if s.symbol == h.symbol),
+                     "sentiment_status": next((s.sentiment_note or "ok") for s in scores if s.symbol == h.symbol)}
                     for h in holdings]
         run = {"as_of": self.as_of.isoformat(), "generated_at": datetime.now().isoformat(timespec="seconds"),
                "sentinelq_version": __version__, "rubric_version": self.r.version,
                "rubric_sha256": self.r.sha256, "classifier_model": self.clf.model_id,
-               "prompt_version": PROMPT_VERSION, "mode": self.mode, "title": self.meta["title"], "coverage": self.meta["coverage"],
+               "prompt_version": PROMPT_VERSION, "mode": self.mode,
+               "retrieval": {"mode": self.retrieval_mode, "as_of": self.as_of.isoformat(), "run_date": self.run_date.isoformat(),
+                             "note": {"live_index_backdated": f"LIVE news index queried on {self.run_date:%d-%b-%Y} with a cut-off of {self.as_of:%d-%b-%Y}: "
+                                                              "NOT a point-in-time backtest (search rankings decay; older articles drop out of feeds).",
+                                      "dated_archive": "Retrieved from a dated archive (GDELT history) for the as-of window.",
+                                      "supplied": "News supplied from a file.", "live": "Live run: as-of date is current."}.get(self.retrieval_mode, "")},
+               "universe_hash": self.universe_hash, "verified": verified_info, "title": self.meta["title"], "coverage": self.meta["coverage"],
                "totals": {"label_failed": len(failed), "retrieved": sum(len(v) for v in raw.values()),
                           "kept": sum(len(v) for v in kept.values()), "dropped": len(dropped)}}
         result = dict(run=run, scores=scores, kept=kept, dropped=dropped, coverage=coverage,
                       price_context=ctx, relative=rel, ingest_errors=ingest_errors, raw_log=raw_log)
         ui.stage("Report", "workbook, commentary per stock, portfolio observations, PDF")
         write_reports(self.out, result, self.r)
-        narr, done_n = {}, 0
+        narr, done_n, lint = {}, 0, []
+        from .lint import strip_price_sentences
         with ThreadPoolExecutor(2) as ex:
             for sc, out in zip(scores, ex.map(lambda sc: self.narrator.holding(sc, kept[sc.symbol]), scores)):
+                clean, removed = strip_price_sentences(out.get("sentiment_rationale", ""), self.r)     # Reconciliation fix 5
+                if removed:
+                    out = {**out, "sentiment_rationale": clean}
+                    lint += [{"symbol": sc.symbol, "removed_sentence": x} for x in removed]
                 narr[sc.symbol] = out
                 done_n += 1
                 ui.narrate(done_n, len(scores), sc.name, sc.symbol)
         ui.clear_status()
         ui.note("  writing portfolio-level observations ...", "d")
         obs = self.narrator.portfolio(portfolio_facts(scores, kept))
-        result.update(narrative=narr, observations=obs)
+        result.update(narrative=narr, observations=obs, lint=lint)
+        if lint:
+            ui.note(f"  price-language lint: removed {len(lint)} sentence(s) from sentiment commentary (share-price moves never feed sentiment)", "y")
         (self.out / "narrative.json").write_text(json.dumps({"holdings": narr, "observations": obs}, indent=2), encoding="utf-8")
         build_pdf(self.out / "sentinelq_scorecard.pdf", result, self.r, narr, obs, self.meta)
         from .audit import write_audit

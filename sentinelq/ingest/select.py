@@ -122,3 +122,33 @@ def select_governance(items: list, exclude: list, cap: int, tokens: list[str]) -
         if len(out) >= cap:
             break
     return out
+
+
+FUND_TITLE = re.compile(r"result|net profit|\bpat\b|profit (rises|jumps|falls|drops|surges|declines|up|down)|revenue|earnings|\bq[1-4]\b|quarter|"
+                        r"guidance|outlook|order (win|book|inflow)|orders?\b|margin|ebitda|dividend|capex|market share|volume|sales", re.I)
+FUND_QUERY = ('(results OR "net profit" OR PAT OR revenue OR earnings OR "Q1" OR "Q2" OR "Q3" OR "Q4" OR guidance OR "order win" OR '
+              'orders OR dividend OR capex OR "market share" OR EBITDA)')
+
+
+def select_fundamentals(items: list, exclude: list, per_window: int, cap: int, tokens: list[str], as_of, window_days: int = 90) -> list:
+    """Results-type articles spread over the WHOLE lookback (<= per_window per 90-day block, <= cap in all), whose title names the company.
+    The latest-N pull can collapse onto the last few weeks and miss the full-year results prints that anchor +2 / -1 (Reconciliation cause 1)."""
+    seen = {(i.url or "").strip().lower().rstrip("/") for i in exclude}
+    seen_t = {re.sub(r"[^a-z0-9]", "", (i.title or "").lower()) for i in exclude}
+    buckets: dict[int, list] = {}
+    for i in sorted((x for x in items if x.kind == "news"), key=lambda x: x.published, reverse=True):
+        k, kt = (i.url or "").strip().lower().rstrip("/"), re.sub(r"[^a-z0-9]", "", (i.title or "").lower())
+        if k in seen or kt in seen_t or not title_hit(i.title or "", tokens) or not FUND_TITLE.search(i.title or ""):
+            continue
+        try:
+            b = (as_of - date.fromisoformat(i.published)).days // window_days
+        except ValueError:
+            continue
+        if len(buckets.setdefault(b, [])) < per_window:
+            buckets[b].append(i)
+            seen.add(k)
+            seen_t.add(kt)
+    out = [i for b in sorted(buckets) for i in buckets[b]][:cap]
+    for i in out:
+        i.purpose, i.origin = "sentiment", "fundamentals"
+    return out

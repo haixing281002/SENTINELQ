@@ -33,7 +33,21 @@ class Rubric:
         return self.data[k]
 
 
-def load_rubric(path: str | Path | None = None) -> Rubric:
+def _merge(a: dict, b: dict) -> dict:
+    for k, v in b.items():
+        a[k] = _merge(a[k], v) if isinstance(v, dict) and isinstance(a.get(k), dict) else v
+    return a
+
+
+def load_rubric(path: str | Path | None = None, overrides: dict | None = None) -> Rubric:
+    """Load the versioned rubric. `overrides` (or env SENTINELQ_RUBRIC_OVERRIDES, a JSON object) deep-merges what-if values;
+    when used, the hash covers the merged result so a run can never silently differ from its recorded rubric."""
+    import os
     p = Path(path) if path else DEFAULT_RUBRIC
     raw = p.read_bytes()
-    return Rubric(json.loads(raw), hashlib.sha256(raw).hexdigest())
+    data = json.loads(raw)
+    ov = overrides or (json.loads(os.environ["SENTINELQ_RUBRIC_OVERRIDES"]) if os.environ.get("SENTINELQ_RUBRIC_OVERRIDES") else None)
+    if ov:
+        data = _merge(data, ov)
+        raw = json.dumps(data, sort_keys=True).encode()
+    return Rubric(data, hashlib.sha256(raw).hexdigest())
