@@ -1,5 +1,5 @@
 {
-  "version": "1.5.0",
+  "version": "1.5.1",
   "_note": "Single source of truth for every weight, penalty and taxonomy entry. Scores change only if this file changes. Values marked 'assumed' were not stated in the architecture document and should be confirmed by the committee.",
   "event_types": [
     "earnings_beat",
@@ -63,7 +63,9 @@
     "aggregation": "signal_events",
     "min_signal_events": 3,
     "plus_two_requires_no_results_offset": true,
-    "aggregation_note": "A 0 label means no signal; the mean is taken over non-zero events (confidence x recency weighted) so the rubric's +2 / -1 anchors are reachable. Falls back to the all-event mean below min_signal_events. +2 only with no material results-type offset in the window."
+    "aggregation_note": "A 0 label means no signal; the mean is taken over non-zero events (confidence x recency weighted) so the rubric's +2 / -1 anchors are reachable. Falls back to the all-event mean below min_signal_events. +2 only with no material results-type offset in the window. Mirror rule for the -1 anchor: when the results-type evidence itself (prints, guidance) is negative on balance (its weighted mean <= results_dominance_threshold), sentiment is capped at -1 whatever the launches and broker notes say - 'material earnings deterioration dominates the year even if partial offsets exist'.",
+    "minus_one_when_results_negative": true,
+    "results_dominance_threshold": -0.5
   },
   "governance": {
     "start": 100,

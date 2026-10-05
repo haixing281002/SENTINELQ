@@ -59,11 +59,20 @@ def sentiment_terms(items: list[LabelledItem], as_of: date, r: Rubric) -> tuple[
             den += w
     mean = num / den if den else None
     rule = f"{'signal' if use_signal else 'all'}-event mean over {sum(1 for t in terms if t[2])} event(s)"
+    is_res = lambda li: li.label.event_type in c["results_event_types"] or li.item.pass_ == "results"
     if mean is not None and use_signal and c.get("plus_two_requires_no_results_offset", True) and mean >= 1.5:
-        offsets = [li for li, w, s in signal if s <= -1 and (li.label.event_type in c["results_event_types"] or li.item.pass_ == "results")]
+        offsets = [li for li, w, s in signal if s <= -1 and is_res(li)]
         if offsets:
             mean = 1.49
             rule += f"; +2 withheld: material results-type offset ('{offsets[0].item.title[:60]}')"
+    if mean is not None and c.get("minus_one_when_results_negative", False):
+        res = [(w, s) for li, w, s in signal if is_res(li)]          # the mirror of the +2 rule: results anchor the year both ways
+        if res:
+            rmean = sum(w * s for w, s in res) / sum(w for w, s in res)
+            thr = c.get("results_dominance_threshold", -0.5)
+            if rmean <= thr and mean > thr:
+                mean = thr
+                rule += f"; capped at -1: results-type evidence is negative on balance (weighted mean {rmean:.2f} over {len(res)} event(s))"
     return terms, mean, rule
 
 

@@ -40,6 +40,10 @@ and every card carries a deterministic "Label split vs the previous run" observa
   (`model_boilerplate`); `passing` is kept for coverage but excluded from the sentiment mean. Prompt v2 invalidates cached v1 labels (B2):
   the next run re-labels every event once.
 
+Rubric v1.5.1 adds the mirror of the +2 rule: when the results-type evidence (prints, guidance) is negative on balance (weighted mean
+<= -0.5), sentiment is capped at -1 whatever the launches and broker notes say - the rubric's own "-1 = material deterioration dominates
+the year even if partial offsets exist" (the Natco case). Without it an averaging method lets seven small positives outvote two bad prints.
+
 Two gate refinements the golden set forced, both conventions rather than weights: a stated `minor` severity keeps the minor band
 (-10) even under the Rs 10 cr floor (Natco NPPA, reconciled 82), and a notice on day 1 / probe on day 2-3 that shares two
 distinctive words is one event even when the two headlines were typed differently (Nestle). Raise both with the IC if you disagree.
