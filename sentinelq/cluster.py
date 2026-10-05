@@ -15,7 +15,8 @@ import re
 from collections import Counter
 from datetime import date
 
-from .config import (CLUSTER_DAYS, CLUSTER_JACCARD, CLUSTER_SHARED_DISTINCTIVE, CONF_BASE, CONF_SLOPE, MERGE_DAYS, TOP_FREQ_TOKENS)
+from .config import (CLUSTER_DAYS, CLUSTER_JACCARD, CLUSTER_SHARED_DISTINCTIVE, CONF_BASE, CONF_SLOPE, MERGE_DAYS, NEAR_DUPLICATE_DAYS,
+                     NEAR_DUPLICATE_JACCARD, TOP_FREQ_TOKENS)
 from .models import LabelledItem, RawItem, parse_date
 from .tiers import TIER_ORDER, best_tier, domain_of, tier_of, tier_weight
 
@@ -71,7 +72,7 @@ def precluster(items: list[RawItem], alias_toks: set[str], common: set[str], day
     for a in range(n):
         for b in range(a + 1, n):
             gap = _days_apart(items[a].published, items[b].published)
-            if gap is None or gap > days:
+            if gap is None or gap > max(days, NEAR_DUPLICATE_DAYS):
                 continue
             ta, tb = toks[a], toks[b]
             if not ta or not tb:
@@ -79,7 +80,9 @@ def precluster(items: list[RawItem], alias_toks: set[str], common: set[str], day
             inter = ta & tb
             jac = len(inter) / len(ta | tb)
             distinct = {w for w in inter if w not in common}
-            if jac >= jaccard or len(distinct) >= shared_min:
+            contain = len(inter) / min(len(ta), len(tb))                                     # a truncated re-run of the same headline
+            near_dup = gap <= NEAR_DUPLICATE_DAYS and (jac >= NEAR_DUPLICATE_JACCARD or (contain >= 0.9 and min(len(ta), len(tb)) >= 4))
+            if near_dup or (gap <= days and (jac >= jaccard or len(distinct) >= shared_min)):
                 ra, rb = find(a), find(b)
                 if ra != rb:
                     parent[max(ra, rb)] = min(ra, rb)

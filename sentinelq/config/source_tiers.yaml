@@ -1,11 +1,13 @@
 # Source tiering (Upgrade Workflow v2.1, A2). Deterministic, by domain. Editable and versioned: a domain moves tier only by
 # editing this file - the model never decides tiers. Unknown domain = T3.
-T1: [bseindia.com, nseindia.com, sebi.gov.in, rbi.org.in, reuters.com, ptinews.com, bloomberg.com]
+T1: [bseindia.com, nseindia.com, sebi.gov.in, rbi.org.in, reuters.com, ptinews.com, bloomberg.com, aninews.in]
 T2: [economictimes.indiatimes.com, livemint.com, business-standard.com, moneycontrol.com,
-     thehindubusinessline.com, financialexpress.com, cnbctv18.com, ndtvprofit.com, thehindu.com]
+     thehindubusinessline.com, financialexpress.com, cnbctv18.com, ndtvprofit.com, thehindu.com,
+     businesstoday.in, ndtv.com, hindustantimes.com, indianexpress.com, telegraphindia.com, deccanherald.com,
+     newindianexpress.com, zeebiz.com, timesofindia.indiatimes.com, business-standard.in, fortuneindia.com, outlookbusiness.com]
 T3: default
 T4: [marketscreener.com, tipranks.com, simplywall.st, investing.com, equitymaster.com, stocktwits.com, 5paisa.com,
      indiainfoline.com, goodreturns.in, marketsmojo.com, trendlyne.com, tickertape.in, chartink.com, business-upturn.com,
-     lokmattimes.com, thehansindia.com, mangalorean.com, sarkaritel.com, zeebiz.com, bizzbuzz.news, pressreleasepoint.com,
-     einnews.com, prnewswire.com, businesswire.com, globenewswire.com, newsvoir.com, aninews.in, msn.com, yahoo.com, flipboard.com]
+     lokmattimes.com, thehansindia.com, mangalorean.com, sarkaritel.com, bizzbuzz.news, pressreleasepoint.com,
+     einnews.com, prnewswire.com, businesswire.com, globenewswire.com, newsvoir.com, msn.com, yahoo.com, flipboard.com]
 tier_weight: {T1: 1.0, T2: 0.9, T3: 0.7, T4: 0.5}

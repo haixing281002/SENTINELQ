@@ -385,7 +385,9 @@ def test_results_quota_keeps_one_print_plus_other_results_type_events_per_quarte
     base = [art("B", f"Bajaj Auto update {k}: volumes yoy", AS_OF - timedelta(days=k), k) for k in range(0, 365, 9)]
     q = AS_OF - timedelta(days=20)
     extra = [art("B", f"Bajaj Auto Q1 results: profit rises {i}", q - timedelta(days=8 * i), 600 + i) for i in range(3)]          # three prints, same quarter, > 2 days apart
-    extra += [art("B", f"Bajaj Auto guidance raised on exports {i}", q - timedelta(days=30 + 6 * i), 700 + i) for i in range(5)]   # five other results-type items
+    others = ["Bajaj Auto guidance raised on exports", "Bajaj Auto bags order from European distributor", "Bajaj Auto capex plan for new Pune plant",
+              "Bajaj Auto margin outlook improves on mix", "Bajaj Auto market share gain in premium motorcycles"]
+    extra += [art("B", t, q - timedelta(days=30 + 10 * i), 700 + i) for i, t in enumerate(others)]                                 # five distinct other results-type items
     p = Pipeline(R, Fixed(base), None, None, KeywordClassifier(), tmp_path / "o", None, AS_OF, governance_pass=False, fundamentals_pass=True,
                  stratified=True, corpus_dir=None, disk_cache=False)
     p.news.fetch_fundamentals = lambda h, s, e: extra                                   # the results pass is a separate search
@@ -496,3 +498,19 @@ def test_negative_results_dominate_many_small_positives_natco_pattern():
     items += [mk(3, "guidance_change", 2, True), mk(8, "earnings_beat", 2, True)]     # results evidence no longer negative on balance
     terms, mean, rule = sentiment_terms(items, AS_OF, R)
     assert to_integer(mean) >= 0 and "capped" not in rule
+
+
+def test_near_identical_headlines_cluster_across_a_week_whatever_the_label():
+    a = art("G", "Godrej Industries Group Hosts Malaysian Delegation to Explore Oil Palm Innovation", date(2026, 9, 29), 1, "o1.com")
+    b = art("G", "Godrej Industries Group Hosts Malaysian Delegation", date(2026, 10, 3), 2, "o2.com")
+    c = art("G", "Godrej Industries Q1 net profit falls 19%, revenue rises 22%", date(2026, 10, 1), 3, "o3.com")
+    alias = CL.alias_tokens("Godrej Industries", "", "GODREJIND")
+    cl = CL.precluster([a, b, c], alias, set())
+    assert len(cl) == 2 and any({x.url for x in g} == {a.url, b.url} for g in cl)
+
+
+def test_tier_corrections_and_new_boilerplate_patterns():
+    from sentinelq.sampler import is_boilerplate
+    assert tier_of("aninews.in") == "T1" and tier_of("businesstoday.in") == "T2" and tier_of("zeebiz.com") == "T2"
+    assert is_boilerplate("Dixon Tech, Bharat Dynamics, Manyavar, Dividends: Last Day To Buy") and is_boilerplate("Godrej Industries Group unveils new brand film")
+    assert is_boilerplate("Dixon Technologies Records Rs 195 Crore Block Trade on NSE") and not is_boilerplate("Godrej Industries Q1 net profit falls 19%")

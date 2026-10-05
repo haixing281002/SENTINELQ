@@ -16,6 +16,8 @@ GOV_PASS_WINDOWS = [9, 8, 7, 6] # ... but filled per window W1..W4 (newest first
 CLUSTER_DAYS = 2                # two articles may join a cluster if published within this many days ...
 CLUSTER_JACCARD = 0.5           # ... and token-Jaccard >= this, or
 CLUSTER_SHARED_DISTINCTIVE = 3  # ... they share >= this many distinctive tokens
+NEAR_DUPLICATE_JACCARD = 0.7    # near-identical headlines (a re-run of the same story) cluster within NEAR_DUPLICATE_DAYS whatever the label
+NEAR_DUPLICATE_DAYS = 7
 TOP_FREQ_TOKENS = 200           # distinctive = not in the top-N corpus-frequency list
 MERGE_DAYS = 3                  # post-label merge: same event_type + same governance flag within this many days = one event
 CONF_BASE, CONF_SLOPE = 0.40, 0.15      # conf = min(1, 0.40 + 0.15 * ln(1 + n_sources)) * tier_weight
@@ -29,6 +31,8 @@ BOILERPLATE_PATTERNS = [
     r"record date (today|alert|tomorrow)", r"ex-?dividend (today|date alert)", r"trading (ideas?|strategy)", r"technical (view|analysis|chart)",
     r"\bintraday\b", r"52-week (high|low)", r"stocks? (rally|surge|jump|fall|drop|slip|crash)e?s? \d+%", r"market (wrap|highlights|roundup)",
     r"\bhere'?s why\b", r"what (should|do) investors", r"\bF&O\b", r"\bweekly wrap\b", r"(nifty|sensex) (today|ends|opens|closes)",
+    r"last day to buy", r"\bex-?date\b", r"dividends?: ", r"block (trade|deal)", r"bulk deal", r"brand film", r"hosts? (a |an )?(delegation|summit|conclave|webinar)",
+    r"shares? (jump|rise|gain|fall|slip|drop|tank|surge)s? \d+%", r"stocks? in (news|action)", r"multibagger", r"wealth creator",
 ]
 MERGE_RESULTS_SAME_QUARTER = True   # results-type events of the same type in the same quarter are ONE event (sources pooled)
 

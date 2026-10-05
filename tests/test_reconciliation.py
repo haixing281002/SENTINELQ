@@ -192,7 +192,13 @@ def test_pipeline_relabels_a_price_only_headline_as_price_move_and_excludes_it(t
     res = Pipeline(R, News(), None, None, KeywordClassifier(), tmp_path / "o", tmp_path / "c.jsonl", date(2026, 7, 3), governance_pass=False,
                    fundamentals_pass=False).run([Holding("GRINDWELL", "Grindwell Norton", "Capital Goods")])
     kinds = {li.item.url: li.label.event_type for li in res["kept"]["GRINDWELL"]}
-    assert kinds["https://x.com/a"] == "price_move" and res["scores"][0].relevant_articles == 1
+    drops = {d.url: d.reason for d in res["dropped"]}
+    # v2.1: a price-only headline is caught earlier as boilerplate (disclosed); the legacy sampler path still relabels it price_move
+    assert kinds.get("https://x.com/a") == "price_move" or drops.get("https://x.com/a") == "boilerplate_headline"
+    assert res["scores"][0].relevant_articles == 1
+    res2 = LegacyPipeline(R, News(), None, None, KeywordClassifier(), tmp_path / "o2", tmp_path / "c2.jsonl", date(2026, 7, 3), governance_pass=False,
+                          fundamentals_pass=False).run([Holding("GRINDWELL", "Grindwell Norton", "Capital Goods")])
+    assert {li.item.url: li.label.event_type for li in res2["kept"]["GRINDWELL"]}["https://x.com/a"] == "price_move"
 
 
 # ---------------------------------------------------------------------------------------------------- s7 fix 6: minimum evidence standard

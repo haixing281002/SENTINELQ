@@ -48,7 +48,8 @@ def score_workings(result: dict, rubric) -> list[dict]:
             rows.append({"symbol": s.symbol, "component": "sentiment", "date": li.item.published, "headline": li.item.title,
                          "url": li.item.url, "event_type": li.label.event_type, "label_value": li.label.sentiment,
                          "age_days": age, "weight": round(w, 6) if inc else 0, "contribution": round(w * li.label.sentiment, 6) if inc else 0,
-                         "note": why or f"recency x confidence {li.item.confidence if li.item.confidence is not None else 1.0}"})
+                         "note": (why or f"recency x confidence {li.item.confidence if li.item.confidence is not None else 1.0}")
+                                 + f"; {li.item.n_members} article(s) from {li.item.n_sources} source(s) in this event, best tier {li.item.max_tier or 'T3'}, window W{li.item.window or '?'}"})
         rows.append({"symbol": s.symbol, "component": "sentiment-total", "date": "", "headline": f"sum(w*s)={num:.6f} / sum(w)={den:.6f}",
                      "url": "", "event_type": "", "label_value": "", "age_days": "", "weight": round(den, 6),
                      "contribution": round(num / den, 6) if den else "", "note": f"{rule}; = {s.company_sentiment_raw}; shown as integer {s.company_sentiment}"})
