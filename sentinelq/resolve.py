@@ -45,8 +45,7 @@ def parse_stock_table(text: str) -> list[Holding]:
         if sym in seen:
             continue
         seen.add(sym)
-        out.append(Holding(sym, clean_name(name), "", "", ""))
-        out[-1].isin = isin  # type: ignore[attr-defined]
+        out.append(Holding(sym, clean_name(name), "", "", "", isin=isin))
     return out
 
 
@@ -78,6 +77,8 @@ def enrich(holdings: list[Holding], universe="portfolio/universe.csv", cache=".c
         if h.sector:
             if not h.aliases and h.symbol in uni:
                 h.aliases = uni[h.symbol].get("aliases", "") or ""
+            if h.symbol in uni:
+                h.bse_code = h.bse_code or (uni[h.symbol].get("bse_code") or "").strip()
             continue
         row = uni.get(h.symbol) or cached.get(h.symbol)
         if row:
@@ -86,6 +87,9 @@ def enrich(holdings: list[Holding], universe="portfolio/universe.csv", cache=".c
                 h.name = uni[h.symbol]["name"]
         if not h.aliases and h.symbol in uni:
             h.aliases = uni[h.symbol].get("aliases", "") or ""
+        if h.symbol in uni:
+            h.bse_code = h.bse_code or (uni[h.symbol].get("bse_code") or "").strip()
+            h.isin = h.isin or (uni[h.symbol].get("isin") or "").strip()
     unknown = [h for h in holdings if not h.sector]
     if unknown and mode == "claude-code":
         try:

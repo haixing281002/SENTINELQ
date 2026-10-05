@@ -67,6 +67,24 @@ def inspect_news(a) -> int:
     return 0
 
 
+def inspect_filings(a) -> int:
+    from .ingest.filings import BseAnnouncements
+    hs = [h for h in _holdings(a) if h.symbol.lower() == a.stock.lower()] if (a.portfolio or a.pick) else []
+    if not hs:
+        from .pipeline import pick_holdings
+        from .resolve import enrich
+        hs = enrich(pick_holdings(a.universe, [a.stock]), a.universe, mode="none")
+    h, as_of = hs[0], date.fromisoformat(a.as_of) if a.as_of else date.today()
+    src = BseAnnouncements()
+    src.on_event = lambda m: print("  " + m)
+    print(f"[STEP 2/6 INGEST] BSE announcements for {h.symbol} ({h.name}, bse_code {h.bse_code or 'lookup'}), 12 months to {as_of}")
+    rows = src.fetch(h, as_of - timedelta(days=365), as_of)
+    for i in rows[: a.show]:
+        print(f"  {i.published}  {i.pass_:<10} {i.title[:95]}")
+    print(f"\n  {len(rows)} filing(s); {len(src.audit)} request(s); nothing saved.")
+    return 0
+
+
 def inspect_label(a) -> int:
     from .classify import KeywordClassifier, to_label
     from .validate import validate_label
@@ -289,6 +307,9 @@ def main(argv: list[str]) -> int:
             q.add_argument("--max-articles", type=int, default=100)
             q.add_argument("--as-of")
             q.add_argument("--show", type=int, default=25)
+    q = ins.add_parser("filings")
+    q.add_argument("--stock", required=True); q.add_argument("--portfolio"); q.add_argument("--pick"); q.add_argument("--universe", default="portfolio/universe.csv")
+    q.add_argument("--as-of"); q.add_argument("--show", type=int, default=40)
     q = ins.add_parser("label")
     q.add_argument("--company", required=True)
     q.add_argument("--headline", required=True)
@@ -338,5 +359,5 @@ def main(argv: list[str]) -> int:
     if a.cmd in ("replay", "relabel", "backtest", "diff", "golden"):
         return corpus_cmd(a)
     if a.cmd == "inspect":
-        return {"input": inspect_input, "news": inspect_news, "label": inspect_label}[a.what](a)
+        return {"input": inspect_input, "news": inspect_news, "label": inspect_label, "filings": inspect_filings}[a.what](a)
     return {"verify": verify, "render": render, "merge": merge}[a.cmd](a)

@@ -12,6 +12,8 @@ class Holding:
     cap: str = ""
     weight: str = ""
     aliases: str = ""      # pipe-separated names the company is known by (universe.csv)
+    isin: str = ""
+    bse_code: str = ""     # BSE scrip code (the number in the bseindia.com company URL) for the filings source
 
 
 @dataclass

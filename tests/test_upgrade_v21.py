@@ -77,17 +77,16 @@ H = [Holding("BAJAJ-AUTO", "Bajaj Auto", "Autos", "Large")]
 def test_a1_stratified_quotas_and_w1_never_fills_the_budget():
     items = [art("X", f"X Corp update {k}", AS_OF - timedelta(days=k % 365), k) for k in range(400)]
     sel, extras, rep = stratified_sample(items, AS_OF, ["x corp"])
-    assert rep["windows"] == {1: 40, 2: 25, 3: 20, 4: 15} and len(sel) == 100
+    assert rep["windows"] == {1: 60, 2: 40, 3: 30, 4: 20} and len(sel) == 150
     assert all(i.window for i in sel)
 
 
 def test_a1_carry_forward_rolls_to_older_then_back_to_newest():
     items = [art("X", f"X Corp update {k}", AS_OF - timedelta(days=k), k) for k in range(0, 120)]       # nothing older than 120 days
     sel, extras, rep = stratified_sample(items, AS_OF, ["x corp"])
-    # W1 holds 31 (short by 9 -> rolls to W2: 25+9), W3 holds 29 (takes its 20), W4 is empty (its 15 roll back to the newest window with
-    # articles left: W2). One article a day, so the per-day cap never binds. Total budget stays 100.
-    assert rep["windows"] == {1: 31, 2: 49, 3: 20, 4: 0} and len(sel) == 100
-    assert rep["carry"][2].get("rolled_back") == 15
+    # W1 holds 31 (short by 29 -> W2 wants 69, holds 60), W3 holds 29 (wants 39), W4 is empty; nothing is left anywhere to roll back
+    # into, so the sample is every usable article: 120 of the 150 budget. One article a day, so the per-day cap never binds.
+    assert rep["windows"] == {1: 31, 2: 60, 3: 29, 4: 0} and len(sel) == 120
 
 
 def test_a1_per_day_cap_six_rest_become_extra_sources():
@@ -351,7 +350,7 @@ def test_signal_event_aggregation_reaches_plus_two_and_offset_caps_it():
     terms, mean, rule = sentiment_terms(items, AS_OF, R)
     assert mean == 1.49 and "+2 withheld" in rule                                      # with the veto on: +2 needs no material offset
     terms, mean, rule = sentiment_terms(items, AS_OF, load_rubric())
-    assert mean > 1.49 and "withheld" not in rule                                      # default: pure net weighing, no veto
+    assert mean > 1.4 and "withheld" not in rule                                       # default: pure net weighing, no veto
     few = [mk(0, "earnings_beat", 2)] + [mk(10 + i, "analyst_action", 0) for i in range(5)]
     assert sentiment_terms(few, AS_OF, R)[2].startswith("all-event")                   # below min_signal_events: fall back
 
@@ -448,13 +447,14 @@ def test_boilerplate_headlines_are_dropped_before_the_model(tmp_path):
 
 def test_budget_scales_the_window_shape_and_is_stamped(tmp_path):
     from sentinelq.sampler import scaled_windows
-    assert [q for _, _, q in scaled_windows(200)] == [80, 50, 40, 30] and [q for _, _, q in scaled_windows(None)] == [40, 25, 20, 15]
+    assert [q for _, _, q in scaled_windows(200)] == [80, 53, 40, 27] and [q for _, _, q in scaled_windows(None)] == [60, 40, 30, 20]
+    assert [q for _, _, q in scaled_windows(100)] == [40, 27, 20, 13]                 # the v2.1 document's shape at its budget
     assert [q for _, _, q in scaled_windows(None, [60, 40, 30, 20])] == [60, 40, 30, 20]
     items = [art("X", f"X Corp update {k}", AS_OF - timedelta(days=k % 365), k) for k in range(1200)]     # ~3 a day: every window can fill
     sel, _, rep = stratified_sample(items, AS_OF, ["x corp"], windows=scaled_windows(200))
-    assert len(sel) == 200 and rep["windows"] == {1: 80, 2: 50, 3: 40, 4: 30}
+    assert len(sel) == 200 and rep["windows"] == {1: 80, 2: 53, 3: 40, 4: 27}
     res = run(tmp_path, bajaj_auto_year(), H, budget=200)
-    assert "budget 200 (80/50/40/30)" in res["run"]["stamp"]
+    assert "budget 200 (80/53/40/27)" in res["run"]["stamp"]
 
 
 def test_passing_mentions_are_coverage_not_signal_and_model_boilerplate_is_dropped():
@@ -514,3 +514,56 @@ def test_tier_corrections_and_new_boilerplate_patterns():
     assert tier_of("aninews.in") == "T1" and tier_of("businesstoday.in") == "T2" and tier_of("zeebiz.com") == "T2"
     assert is_boilerplate("Dixon Tech, Bharat Dynamics, Manyavar, Dividends: Last Day To Buy") and is_boilerplate("Godrej Industries Group unveils new brand film")
     assert is_boilerplate("Dixon Technologies Records Rs 195 Crore Block Trade on NSE") and not is_boilerplate("Godrej Industries Q1 net profit falls 19%")
+
+
+def test_recency_floor_keeps_the_whole_year_in_play():
+    from sentinelq.score import recency_weight
+    w_recent = recency_weight((AS_OF - timedelta(days=10)).isoformat(), AS_OF, R)
+    w_jan = recency_weight((AS_OF - timedelta(days=270)).isoformat(), AS_OF, R)
+    w_old = recency_weight((AS_OF - timedelta(days=360)).isoformat(), AS_OF, R)
+    assert w_recent > 0.9 and 0.25 <= w_old <= w_jan < w_recent and w_jan / w_recent > 0.3
+    r60 = load_rubric(overrides={"sentiment": {"half_life_trading_days": 60, "recency_floor": 0.0}})
+    assert recency_weight((AS_OF - timedelta(days=270)).isoformat(), AS_OF, r60) < 0.15          # the old one-quarter behaviour
+
+
+def test_bse_filings_provider_parses_announcements_and_rejects_a_wrong_scrip(tmp_path):
+    import io, json as _json
+    from sentinelq.ingest.filings import BseAnnouncements
+    rows = [{"SLONGNAME": "TITAN COMPANY LTD.", "NEWSSUB": "Announcement under Regulation 30 (LODR)-Resignation of Chief Financial Officer", "HEADLINE": "Mr X has resigned as CFO with effect from 20-Jun-2026",
+             "CATEGORYNAME": "Company Update", "NEWS_DT": "2026-06-20T18:02:11", "ATTACHMENTNAME": "a1.pdf", "NEWSID": "n1"},
+            {"SLONGNAME": "TITAN COMPANY LTD.", "NEWSSUB": "Financial Results For The Quarter Ended June 30, 2026", "HEADLINE": "Unaudited results", "CATEGORYNAME": "Result",
+             "NEWS_DT": "2026-07-31T15:00:00", "ATTACHMENTNAME": "a2.pdf", "NEWSID": "n2"},
+            {"SLONGNAME": "TITAN COMPANY LTD.", "NEWSSUB": "Press Release - Titan launches new store format", "HEADLINE": "", "CATEGORYNAME": "Company Update",
+             "NEWS_DT": "2026-08-05T10:00:00", "ATTACHMENTNAME": "", "NEWSID": "n3"},
+            {"SLONGNAME": "SOME OTHER LTD.", "NEWSSUB": "Outcome of Board Meeting", "HEADLINE": "x", "CATEGORYNAME": "Board Meeting", "NEWS_DT": "2026-08-06T10:00:00", "ATTACHMENTNAME": "", "NEWSID": "n4"}]
+
+    class Resp(io.BytesIO):
+        headers = {}
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def geturl(self): return "x"
+    calls = []
+    def opener(req, timeout=0):
+        calls.append(req.full_url)
+        return Resp(_json.dumps({"Table": rows, "Table1": [{"ROWCNT": len(rows)}]}).encode())
+    src = BseAnnouncements(sleep=lambda s: None, opener=opener, page_days=400)
+    h = Holding("TITAN", "Titan Company", "Consumption", bse_code="500114")
+    got = src.fetch(h, date(2026, 1, 1), date(2026, 10, 5))
+    assert [i.pass_ for i in got] == ["governance", "results", "sentiment"] and all(i.source == "bseindia.com" and i.origin == "filings" for i in got)
+    assert got[0].title.startswith("Titan Company:") and got[0].url.endswith("a1.pdf") and got[0].published == "2026-06-20"
+    assert "strScrip=500114" in calls[0] and len(got) == 3                                   # the other company's row was rejected
+    assert tier_of("bseindia.com") == "T1"
+
+
+def test_filings_join_the_run_as_results_and_governance_anchors(tmp_path):
+    class Filings:
+        audit = []
+        def fetch(self, h, s, e):
+            return [RawItem(h.symbol, "news", "Bajaj Auto: Resignation of Company Secretary", "Company Update. Ms Y resigns as CS and Compliance Officer", "https://www.bseindia.com/x/1.pdf",
+                            (AS_OF - timedelta(days=200)).isoformat(), "bseindia.com", origin="filings", purpose="governance", pass_="governance", style="filing")]
+    p = Pipeline(R, Fixed(bajaj_auto_year()), None, None, KeywordClassifier(), tmp_path / "o", None, AS_OF, governance_pass=False, fundamentals_pass=False,
+                 stratified=True, corpus_dir=None, disk_cache=False, filings=Filings(), fetch_text_events=False)
+    res = p.run(H)
+    s = res["scores"][0]
+    assert any(li.item.origin == "filings" for li in res["kept"]["BAJAJ-AUTO"]) and "filings 1" in s.coverage_map
+    assert any(p_["event_type"] == "management_exit" for p_ in s.governance_penalties)

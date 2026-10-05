@@ -1,5 +1,5 @@
 {
-  "version": "1.5.2",
+  "version": "1.6.0",
   "_note": "Single source of truth for every weight, penalty and taxonomy entry. Scores change only if this file changes. Values marked 'assumed' were not stated in the architecture document and should be confirmed by the committee.",
   "event_types": [
     "earnings_beat",
@@ -48,7 +48,7 @@
     "prices_days": 183
   },
   "sentiment": {
-    "half_life_trading_days": 60,
+    "half_life_trading_days": 126,
     "trading_days_per_year": 252,
     "min_relevant_articles": 8,
     "require_results_print": true,
@@ -65,7 +65,9 @@
     "plus_two_requires_no_results_offset": false,
     "aggregation_note": "Anchored at 0: a 0 label is no signal and neither adds nor subtracts. Every non-zero event pulls in its direction with recency x confidence weight; the score is the net of all positives against all negatives (falls back to the all-event mean below min_signal_events). The two veto rules (plus_two_requires_no_results_offset, minus_one_when_results_negative) are OFF: the IC can switch them on if it decides results prints should override the net weighing.",
     "minus_one_when_results_negative": false,
-    "results_dominance_threshold": -0.5
+    "results_dominance_threshold": -0.5,
+    "recency_floor": 0.25,
+    "recency_note": "Weight = max(recency_floor, 0.5 ^ (age_trading_days / half_life_trading_days)). Half-life 126 trading days (half a year) with a 0.25 floor, so the whole 12-month lookback counts: a January item carries ~0.3 of a September item's weight, not ~0.05 as under the 60-day half-life, which made sentiment effectively a one-quarter score."
   },
   "governance": {
     "start": 100,

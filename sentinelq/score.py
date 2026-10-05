@@ -14,7 +14,7 @@ def recency_weight(published: str, as_of: date, r: Rubric) -> float:
     d = parse_date(published)
     age_cal = max((as_of - d).days, 0)
     age_td = age_cal * r["sentiment"]["trading_days_per_year"] / 365.0
-    return 0.5 ** (age_td / r["sentiment"]["half_life_trading_days"])
+    return max(float(r["sentiment"].get("recency_floor", 0.0)), 0.5 ** (age_td / r["sentiment"]["half_life_trading_days"]))
 
 
 def to_integer(x: float | None) -> int | None:
@@ -111,7 +111,7 @@ def evidence_standard(items: list[LabelledItem], as_of: date, r: Rubric) -> dict
             "event_mode": event_mode}
 
 
-def coverage_map(items: list[LabelledItem], ev: dict) -> dict:
+def coverage_map(items: list[LabelledItem], ev: dict, as_of: date | None = None, r: Rubric | None = None) -> dict:
     """A4 coverage map for one stock: per-window event counts, results events, T1/T2 share, confidence-weighted n, dominance."""
     from .config import RESULTS_EVENTS_MAX, WINDOW_DOMINANCE
     from .sampler import window_counts
@@ -131,8 +131,17 @@ def coverage_map(items: list[LabelledItem], ev: dict) -> dict:
         text += " · no events in " + ", ".join(zero)
     if dominated:
         text += f" · W{max(wc, key=wc.get)} dominates ({max(wc.values()) / n:.0%} of events)"
+    wshare = {}
+    if as_of is not None and r is not None and rel:                 # how much of the sentiment WEIGHT each window carries (holistic check)
+        tot = sum(event_weight(li, as_of, r) for li in rel) or 1.0
+        for k in wc:
+            wshare[k] = round(sum(event_weight(li, as_of, r) for li in rel if li.item.window == k) / tot, 2)
+        text += " · weight " + " ".join(f"W{k}:{v:.0%}" for k, v in wshare.items())
+    filings = sum(1 for li in news if li.item.origin == "filings")
+    if filings:
+        text += f" · filings {filings}"
     return {"text": text, "windows": wc, "n_events": n, "n_results": ev["results"], "tier12_share": share, "conf_weighted_n": cwn,
-            "dominated": dominated}
+            "dominated": dominated, "weight_share": wshare}
 
 
 def _penalty(pen, lab):
@@ -404,7 +413,7 @@ def score_portfolio(holdings: list[Holding], by_symbol: dict[str, list[LabelledI
         if ev["collapsed"] and not ev["insufficient"]:
             note = f"EVIDENCE WINDOW COLLAPSED: articles span only {ev['span']} days ({ev['first']}..{ev['last']}) of the 12-month lookback"
         low = low or bool(ev["insufficient"]) or ev["collapsed"]
-        cm = coverage_map(items, ev)
+        cm = coverage_map(items, ev, as_of, r)
         rat = (f"Governance = {r['governance']['start']} with penalties [{pen_txt}] = {g_score:g} ({g_label}). "
                f"Sentiment from {ev['n']} relevant news item(s), half-life {r['sentiment']['half_life_trading_days']} trading days."
                + (f" {note}." if note else "") + (" LOW CONFIDENCE." if low else ""))

@@ -1,31 +1,31 @@
-symbol,name,sector,cap,weight,aliases
-BAJFINANCE,Bajaj Finance,BFSI,Large,,Bajaj Finance|Bajaj Finance Ltd
-POLYCAB,Polycab India,Consumption,Large,,Polycab India|Polycab
-MAHABANK,Bank of Maharashtra,Bank,Mid,,Bank of Maharashtra
-CUMMINSIND,Cummins India,Autos,Large,,Cummins India
-BAJAJ-AUTO,Bajaj Auto,Autos,Large,,Bajaj Auto|Bajaj Auto Ltd
-EICHERMOT,Eicher Motors,Autos,Large,,Eicher Motors
-KAJARIACER,Kajaria Ceramics,Infra,Small,,Kajaria Ceramics
-LALPATHLAB,Dr. Lal PathLabs,Healthcare,Small,,Dr. Lal PathLabs|Dr Lal PathLabs|Dr Lal Path Labs|Lal PathLabs
-NAM-INDIA,Nippon Life India Asset Management,BFSI,Mid,,Nippon Life India Asset Management|Nippon Life India AMC|Nippon Life AMC
-HINDCOPPER,Hindustan Copper,Metals & Mining,Small,,Hindustan Copper
-NMDC,NMDC,Metals & Mining,Mid,,NMDC|NMDC Ltd
-NATIONALUM,National Aluminium,Metals & Mining,Mid,,National Aluminium Company|National Aluminium|NALCO
-NESTLEIND,Nestle India,FMCG,Large,,Nestle India|Nestle India Ltd
-AIAENG,AIA Engineering,Autos,Small,,AIA Engineering
-AUBANK,AU Small Finance Bank,Bank,Mid,,AU Small Finance Bank|AU Bank
-CANBK,Canara Bank,Bank,Large,,Canara Bank
-GRINDWELL,Grindwell Norton,Capital Goods,Small,,Grindwell Norton
-HONAUT,Honeywell Automation India,Consumption,Small,,Honeywell Automation India|Honeywell Automation
-MARICO,Marico,FMCG,Mid,,Marico|Marico Ltd
-SONACOMS,Sona BLW Precision Forgings,Autos,Small,,Sona BLW Precision Forgings|Sona Comstar|Sona BLW
-TITAN,Titan Company,Consumption,Large,,Titan Company|Titan Co|Titan Industries
-MARUTI,Maruti Suzuki India,Autos,Large,,Maruti Suzuki India|Maruti Suzuki
-BOSCHLTD,Bosch,Autos,Large,,Bosch Ltd|Bosch Limited|Bosch India
-3MINDIA,3M India,Diversified,Large,,3M India|3M India Ltd
-COALINDIA,Coal India,Metals & Mining,Large,,Coal India|Coal India Ltd|Coal India Limited
-DRREDDY,Dr. Reddy's Laboratories,Healthcare,Large,,Dr. Reddy's Laboratories|Dr Reddys Laboratories|Dr. Reddy's|Dr Reddy's|Dr Reddys
-ZENTEC,Zen Technologies,Capital Goods,Small,,Zen Technologies|Zen Technologies Ltd
-ANGELONE,Angel One,BFSI,Small,,Angel One|Angel One Ltd
-NATCOPHARM,Natco Pharma,Healthcare,Small,,Natco Pharma|Natco Pharma Ltd
-JBCHEPHARM,JB Chemicals & Pharmaceuticals,Healthcare,Small,,JB Chemicals & Pharmaceuticals|JB Chemicals|JB Pharma
+symbol,name,sector,cap,weight,aliases,bse_code
+BAJFINANCE,Bajaj Finance,BFSI,Large,,Bajaj Finance|Bajaj Finance Ltd,500034
+POLYCAB,Polycab India,Consumption,Large,,Polycab India|Polycab,542652
+MAHABANK,Bank of Maharashtra,Bank,Mid,,Bank of Maharashtra,532525
+CUMMINSIND,Cummins India,Autos,Large,,Cummins India,500480
+BAJAJ-AUTO,Bajaj Auto,Autos,Large,,Bajaj Auto|Bajaj Auto Ltd,532977
+EICHERMOT,Eicher Motors,Autos,Large,,Eicher Motors,505200
+KAJARIACER,Kajaria Ceramics,Infra,Small,,Kajaria Ceramics,500233
+LALPATHLAB,Dr. Lal PathLabs,Healthcare,Small,,Dr. Lal PathLabs|Dr Lal PathLabs|Dr Lal Path Labs|Lal PathLabs,539524
+NAM-INDIA,Nippon Life India Asset Management,BFSI,Mid,,Nippon Life India Asset Management|Nippon Life India AMC|Nippon Life AMC,540767
+HINDCOPPER,Hindustan Copper,Metals & Mining,Small,,Hindustan Copper,513599
+NMDC,NMDC,Metals & Mining,Mid,,NMDC|NMDC Ltd,526371
+NATIONALUM,National Aluminium,Metals & Mining,Mid,,National Aluminium Company|National Aluminium|NALCO,532234
+NESTLEIND,Nestle India,FMCG,Large,,Nestle India|Nestle India Ltd,500790
+AIAENG,AIA Engineering,Autos,Small,,AIA Engineering,532683
+AUBANK,AU Small Finance Bank,Bank,Mid,,AU Small Finance Bank|AU Bank,540611
+CANBK,Canara Bank,Bank,Large,,Canara Bank,532483
+GRINDWELL,Grindwell Norton,Capital Goods,Small,,Grindwell Norton,506076
+HONAUT,Honeywell Automation India,Consumption,Small,,Honeywell Automation India|Honeywell Automation,517174
+MARICO,Marico,FMCG,Mid,,Marico|Marico Ltd,531642
+SONACOMS,Sona BLW Precision Forgings,Autos,Small,,Sona BLW Precision Forgings|Sona Comstar|Sona BLW,543300
+TITAN,Titan Company,Consumption,Large,,Titan Company|Titan Co|Titan Industries,500114
+MARUTI,Maruti Suzuki India,Autos,Large,,Maruti Suzuki India|Maruti Suzuki,532500
+BOSCHLTD,Bosch,Autos,Large,,Bosch Ltd|Bosch Limited|Bosch India,500530
+3MINDIA,3M India,Diversified,Large,,3M India|3M India Ltd,523395
+COALINDIA,Coal India,Metals & Mining,Large,,Coal India|Coal India Ltd|Coal India Limited,533278
+DRREDDY,Dr. Reddy's Laboratories,Healthcare,Large,,Dr. Reddy's Laboratories|Dr Reddys Laboratories|Dr. Reddy's|Dr Reddy's|Dr Reddys,500124
+ZENTEC,Zen Technologies,Capital Goods,Small,,Zen Technologies|Zen Technologies Ltd,533339
+ANGELONE,Angel One,BFSI,Small,,Angel One|Angel One Ltd,543235
+NATCOPHARM,Natco Pharma,Healthcare,Small,,Natco Pharma|Natco Pharma Ltd,524816
+JBCHEPHARM,JB Chemicals & Pharmaceuticals,Healthcare,Small,,JB Chemicals & Pharmaceuticals|JB Chemicals|JB Pharma,506943

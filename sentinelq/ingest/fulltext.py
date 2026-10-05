@@ -18,13 +18,49 @@ def _extract(raw: str, limit: int) -> str:
     return text[:limit]
 
 
-def fetch_text(url: str, limit: int = 1800, timeout: int = 6) -> str:
+_GLINK = re.compile(r'href="(https?://(?!news\.google\.com|www\.google\.com|accounts\.google)[^"]+)"')
+
+
+def resolve_google_link(url: str, timeout: int = 6) -> str:
+    """Google News RSS links are redirect pages; the publisher URL is the first outbound link on them (free, no API)."""
     try:
         req = urllib.request.Request(url, headers=UA)
         with urllib.request.urlopen(req, timeout=timeout) as r:
-            if "html" not in (r.headers.get("Content-Type") or "html"):
+            final = r.geturl()
+            if "news.google.com" not in final:
+                return final
+            page = r.read(200_000).decode("utf-8", "replace")
+        m = _GLINK.search(page)
+        return html.unescape(m.group(1)) if m else ""
+    except Exception:
+        return ""
+
+
+def _pdf_text(raw: bytes, limit: int) -> str:
+    try:
+        import pymupdf
+        doc = pymupdf.open(stream=raw, filetype="pdf")
+        text = " ".join(doc[i].get_text() for i in range(min(3, doc.page_count)))
+        return re.sub(r"\s+", " ", text).strip()[:limit]
+    except Exception:
+        return ""
+
+
+def fetch_text(url: str, limit: int = 1800, timeout: int = 6) -> str:
+    try:
+        if "news.google.com" in url:
+            url = resolve_google_link(url, timeout)
+            if not url:
                 return ""
-            return _extract(r.read(400_000).decode("utf-8", "replace"), limit)
+        req = urllib.request.Request(url, headers=UA)
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            ctype = (r.headers.get("Content-Type") or "html").lower()
+            raw = r.read(1_500_000)
+            if "pdf" in ctype or url.lower().endswith(".pdf"):
+                return _pdf_text(raw, limit)                   # exchange filings are PDFs: first pages only, in memory
+            if "html" not in ctype:
+                return ""
+            return _extract(raw.decode("utf-8", "replace"), limit)
     except Exception:
         return ""
 
@@ -34,10 +70,7 @@ def enrich(items, cache_path=None, workers: int = 16, progress=None, budget: flo
     Whatever has not arrived by then is read from its headline alone; the run never waits on slow or paywalled sites.
     `cache_path` is accepted for compatibility; nothing is written."""
     from concurrent.futures import wait
-    for i in items:                       # Google News links are redirect pages with no article body: headline only
-        if i.kind == "news" and "news.google.com" in (i.url or ""):
-            i.parse = "headline-only (google link)"
-    todo = [i for i in items if i.kind == "news" and not i.snippet and i.url and "news.google.com" not in i.url]
+    todo = [i for i in items if i.kind == "news" and i.url and (not i.snippet or i.style == "filing")]
     ex = ThreadPoolExecutor(workers)
     futs = {ex.submit(fetch_text, i.url): i for i in todo}
     done, _pending = wait(list(futs), timeout=budget)

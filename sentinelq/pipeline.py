@@ -26,6 +26,7 @@ from .ingest.select import count_usable, month_spark, name_tokens, select_articl
 from .sampler import stratified_sample
 from .cluster import alias_tokens, attach_extras, build_event, post_label_merge, precluster, top_frequency, url_hash
 from .config import RESULTS_EVENTS_MAX
+import re
 import re as _re
 _PRINT = _re.compile(r"result|net profit|\bpat\b|profit (rises|jumps|falls|drops|surges|declines|up|down)|revenue|earnings|\bq[1-4]\b|quarter", _re.I)
 from .pdf import build_pdf
@@ -111,7 +112,7 @@ class Pipeline:
                  fundamentals_pass: bool = True, fundamentals_cap: int = 40, retrieval_mode: str = "live", run_date: date | None = None,
                  verified_events: str | Path | None = None, universe_hash: str = "", stratified: bool = True,
                  corpus_dir: str | Path | None = None, news_choice: str = "", golden_file: str | Path | None = None, corpus_union: bool = True,
-                 budget: int | None = None, window_quotas: list[int] | None = None):
+                 budget: int | None = None, window_quotas: list[int] | None = None, filings=None, fetch_text_events: bool = True):
         self.r, self.news, self.actions, self.prices, self.clf = rubric, news, actions, prices, classifier
         self.out = Path(out_dir)
         self.cache = LabelCache(cache_path if disk_cache else None)   # label cache holds hash -> label only, no article text
@@ -119,7 +120,7 @@ class Pipeline:
         self.mode = mode
         self.max_articles = max_articles
         self.max_label_failure = max_label_failure
-        self.fetch_text = fetch_text
+        self.fetch_text, self.fetch_text_events, self.filings = fetch_text, fetch_text_events, filings
         self.governance_pass, self.governance_cap = governance_pass, governance_cap
         self.fundamentals_pass, self.fundamentals_cap = fundamentals_pass, fundamentals_cap
         self.retrieval_mode, self.run_date, self.verified_events, self.universe_hash = retrieval_mode, run_date or date.today(), verified_events, universe_hash
@@ -140,6 +141,7 @@ class Pipeline:
         self._extras: dict[str, list] = {}
         self._articles_seen: dict[str, list[dict]] = {}
         self._sample_drops: dict[str, list] = {}
+        self._filings_count: dict[str, int] = {}
         self._merges: list[dict] = []
         self._cluster_drops: list[dict] = []
         self.llm_items = 0                       # items actually sent to the model this run (A5.6 / B7.5)
@@ -215,6 +217,25 @@ class Pipeline:
                 items += picked
             except Exception as e:
                 errs.append({"symbol": h.symbol, "provider": type(self.news).__name__ + ".governance", "error": repr(e)})
+        if self.filings is not None and self.stratified:        # free exchange filings: results + governance anchors, press releases as extra evidence
+            try:
+                fl = self.filings.fetch(h, self.as_of - timedelta(days=w["news_days"]), self.as_of)
+                from .sampler import window_of
+                seen_t = {re.sub(r"[^a-z0-9]", "", (i.title or "").lower()) for i in items}
+                kept_f = []
+                for i in fl:
+                    if re.sub(r"[^a-z0-9]", "", i.title.lower()) in seen_t:
+                        continue
+                    i.window = window_of(i.published, self.as_of, self.windows)
+                    if i.window is not None:
+                        kept_f.append(i)
+                self._articles_seen.setdefault(h.symbol, []).extend(self._article_row(i, "") for i in kept_f)
+                items += kept_f
+                self._filings_count[h.symbol] = len(kept_f)
+            except Exception as e:
+                errs_f = {"symbol": h.symbol, "provider": "BseAnnouncements", "error": repr(e)[:160]}
+                self._filings_count[h.symbol] = 0
+                self.ui.note(f"        filings: {errs_f['error']} (run continues on news alone)", "y")
         return items, found, errs
 
     def _article_row(self, i, dropped_reason: str) -> dict:
@@ -263,6 +284,14 @@ class Pipeline:
         n_in = len(news) + len(extras)
         self.ui.note(f"        events: {n_in} article(s) -> {len(events)} event(s) ({sum(1 for e in events if e.n_members > 1)} multi-source); "
                      f"only representatives are labelled", "d")
+        if self.fetch_text_events and not self.fetch_text:          # read the body of results / governance representatives only (in memory)
+            from .ingest.fulltext import enrich
+            reps = [e for e in events if e.pass_ in ("results", "governance") or e.origin == "filings"]
+            if reps:
+                enrich(reps, None, progress=self.ui.fulltext, budget=20.0)
+                self.ui.clear_status()
+                got = sum(1 for e in reps if e.parse.startswith("full-text"))
+                self.ui.note(f"        full text read for {got}/{len(reps)} results / governance / filing event(s) (headline-only for the rest)", "d")
         return events + rest, dropped
 
     def _prep(self, h, items):
@@ -302,6 +331,8 @@ class Pipeline:
             gv = sum(1 for i in items if i.purpose == "governance")
             if gv:
                 ui.note(f"        governance pass: {gv} candidate article(s) from the full 12 months (feed governance scoring only)", "d")
+            if self._filings_count.get(h.symbol):
+                ui.note(f"        exchange filings (BSE, free): {self._filings_count[h.symbol]} announcement(s) in the window", "d")
             rep = self._sample_reports.get(h.symbol)
             if rep:
                 ws = " ".join(f"W{k}:{rep['windows'][k]}/{rep['quota'][k]}" for k in rep["windows"])
@@ -561,7 +592,8 @@ class Pipeline:
         return {"news_source": type(self.news).__name__ if self.news else None, "actions_source": type(self.actions).__name__ if self.actions else None,
                 "prices_source": type(self.prices).__name__ if self.prices else None, "max_articles_per_stock": self.max_articles,
                 "governance_pass": self.governance_pass, "governance_cap": self.governance_cap, "full_text": self.fetch_text,
-                "budget": self.budget, "windows": self.windows,
+                "budget": self.budget, "windows": self.windows, "filings_source": type(self.filings).__name__ if self.filings else None,
+                "fetch_text_events": self.fetch_text_events,
                 "generic_headline_prefilter": self.prefilter, "as_of": self.as_of.isoformat(), "mode": self.mode,
                 "retrieval_mode": self.retrieval_mode, "run_date": self.run_date.isoformat(), "universe_hash": self.universe_hash[:12],
                 "fundamentals_pass": self.fundamentals_pass, "fundamentals_cap": self.fundamentals_cap,

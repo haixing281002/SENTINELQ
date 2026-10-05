@@ -814,15 +814,29 @@ def test_pipeline_with_google_news_keeps_latest_50_titles_that_name_the_company(
     assert all(i.source == "economictimes.indiatimes.com" for i in news)
 
 
-def test_fulltext_skips_google_redirect_links(monkeypatch):
+def test_fulltext_resolves_google_redirect_links_to_the_publisher(monkeypatch):
+    """Google News RSS links are redirect pages; the publisher URL is the first outbound link on them (resolved free, in memory)."""
     from sentinelq.ingest import fulltext
     from sentinelq.models import RawItem
     calls = []
-    monkeypatch.setattr(fulltext, "fetch_text", lambda url, *a, **k: calls.append(url) or "body")
+    monkeypatch.setattr(fulltext, "resolve_google_link", lambda url, timeout=6: calls.append(url) or "https://publisher.com/real")
+    monkeypatch.setattr(fulltext, "_extract", lambda raw, limit: "body text")
+    import io
+
+    class Resp(io.BytesIO):
+        headers = {"Content-Type": "text/html"}
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def geturl(self): return "https://publisher.com/real"
+    monkeypatch.setattr(fulltext.urllib.request, "urlopen", lambda req, timeout=0: Resp(b"<p>x</p>"))
     items = [RawItem("X", "news", "t", "", "https://news.google.com/rss/articles/abc", "2026-06-01"),
              RawItem("X", "news", "t2", "", "https://example.com/story", "2026-06-01")]
     fulltext.enrich(items)
-    assert calls == ["https://example.com/story"] and items[0].parse == "headline-only (google link)"
+    assert calls == ["https://news.google.com/rss/articles/abc"] and all(i.parse.startswith("full-text") for i in items)
+    monkeypatch.setattr(fulltext, "resolve_google_link", lambda url, timeout=6: "")
+    items = [RawItem("X", "news", "t", "", "https://news.google.com/rss/articles/abc", "2026-06-01")]
+    fulltext.enrich(items)
+    assert items[0].parse.startswith("headline-only")                                  # unresolvable link: headline only, never an error
 
 
 # ---- governance: literal-rule misfires (elevations scored as exits) and the 12-month governance pass -------------
