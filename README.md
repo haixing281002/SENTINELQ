@@ -44,6 +44,8 @@ Prose in the PDF (rationales, one-line reads, observations) is written by the mo
 score with arithmetic) are project skills: they load automatically whenever Claude Code is opened in this repo.
 Quick run for typed names: `sentinelq --pick "Angel One, Titan Company"` (resolves against `portfolio/universe.csv`; no weights needed - Cap/Wt columns show only if you supply them).
 
+`.mcp.json` registers NSE India's MCP servers (`nse-bhavcopy`: official end-of-day cash-market bhavcopy; `cm-market`: exchange capital-market data) for symbol checks and price/action cross-checks. Prices still never feed a score. See `docs/NSE_MCP.md`.
+
 ## PDF fidelity
 `sentinelq/pdf.py` reproduces the reference QVM scorecard (A4 portrait, ReportLab core fonts, palette
 `#1a2452 #2c3a70 #5a6b9e #1f2637 #c9d1e5 #f3f6fd`, label fills Clean `#e4f1ea` / Watch `#fbf1de` / Flag `#f7e4e5`,

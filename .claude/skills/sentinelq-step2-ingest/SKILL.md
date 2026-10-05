@@ -18,6 +18,8 @@ never a score). Every item carries its source URL and publication date from the 
 `python -m sentinelq inspect news --portfolio portfolio/stocks_given.tsv --stock ANGELONE --source gnews --max-articles 100 --as-of 2026-07-03`
 (prints every request it made, the kept articles, and the governance candidates).
 
+**Exchange data (MCP):** `.mcp.json` registers NSE India's `nse-bhavcopy` (end-of-day cash-market file) and `cm-market` servers; use them to cross-check a symbol, a close, or a dividend/split record against the exchange. Context only - prices never feed a score. See `docs/NSE_MCP.md`.
+
 **Manually verify:** `runs/<date>/audit/queries.jsonl` lists every request URL; `RUN_RECORD.md` Step 2 table shows requests, retrieved, governance-pass counts.
 Google News links are redirect URLs (they open the publisher) - they cite the source but cannot be fetched for body text.
 
