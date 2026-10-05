@@ -32,12 +32,12 @@ and every card carries a deterministic "Label split vs the previous run" observa
 
 - **Weights:** half-life 60 -> 126 trading days with a 0.25 floor inside the lookback, so a January item carries ~0.3 of a September item's
   weight instead of ~0.05. Every scorecard row's coverage map now prints the sentiment WEIGHT share per window (`weight W1:34% W2:30% ...`).
-- **Budget:** default 150 (60/40/30/20); the v2.1 document's 100 is `--budget 100`. Governance search cap 40 (12/11/9/8).
+- **Budget:** default 100 (the v2.1 document); `--budget 150` for the larger sample. Governance search cap 30 (`--governance-cap 40` to widen).
 - **BSE announcements** (`sentinelq/ingest/filings.py`, free, no key): results and governance filings join the run as anchors, press releases
-  as extra sentiment evidence, all tiered T1. `bse_code` in `portfolio/universe.csv`; the exchange's own company name is checked before
-  any row is used. `--filings none` to switch off; `python -m sentinelq inspect filings --stock TITAN` to look.
-- **Body text** is read (in memory, free) for results / governance / filing event representatives by default; Google News links are
-  resolved to the publisher page; exchange PDFs are read from their first pages. `--fetch-text` reads everything; `--no-fetch-text` nothing.
+  as extra sentiment evidence, all tiered T1. **Opt-in: `--filings bse`.** `bse_code` in `portfolio/universe.csv`; the exchange's own company name is checked before
+  any row is used. `python -m sentinelq inspect filings --stock TITAN` to look.
+- **Body text** (opt-in: `--fetch-text-events`) is read in memory for results / governance / filing event representatives; Google News
+  links are resolved to the publisher page; exchange PDFs are read from their first pages. `--fetch-text` reads everything.
 - Sentiment starts at 0 and is the net weighing of every positive against every negative (v1.5.2), unchanged.
 
 ## Budget and stricter dropping (after the 5-Oct review)

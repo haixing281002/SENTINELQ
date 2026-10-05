@@ -112,7 +112,7 @@ class Pipeline:
                  fundamentals_pass: bool = True, fundamentals_cap: int = 40, retrieval_mode: str = "live", run_date: date | None = None,
                  verified_events: str | Path | None = None, universe_hash: str = "", stratified: bool = True,
                  corpus_dir: str | Path | None = None, news_choice: str = "", golden_file: str | Path | None = None, corpus_union: bool = True,
-                 budget: int | None = None, window_quotas: list[int] | None = None, filings=None, fetch_text_events: bool = True):
+                 budget: int | None = None, window_quotas: list[int] | None = None, filings=None, fetch_text_events: bool = False):
         self.r, self.news, self.actions, self.prices, self.clf = rubric, news, actions, prices, classifier
         self.out = Path(out_dir)
         self.cache = LabelCache(cache_path if disk_cache else None)   # label cache holds hash -> label only, no article text
@@ -284,14 +284,17 @@ class Pipeline:
         n_in = len(news) + len(extras)
         self.ui.note(f"        events: {n_in} article(s) -> {len(events)} event(s) ({sum(1 for e in events if e.n_members > 1)} multi-source); "
                      f"only representatives are labelled", "d")
-        if self.fetch_text_events and not self.fetch_text:          # read the body of results / governance representatives only (in memory)
-            from .ingest.fulltext import enrich
-            reps = [e for e in events if e.pass_ in ("results", "governance") or e.origin == "filings"]
-            if reps:
-                enrich(reps, None, progress=self.ui.fulltext, budget=20.0)
-                self.ui.clear_status()
-                got = sum(1 for e in reps if e.parse.startswith("full-text"))
-                self.ui.note(f"        full text read for {got}/{len(reps)} results / governance / filing event(s) (headline-only for the rest)", "d")
+        if self.fetch_text_events and not self.fetch_text:          # opt-in: read the body of results / governance representatives (in memory)
+            try:
+                from .ingest.fulltext import enrich
+                reps = [e for e in events if e.pass_ in ("results", "governance") or e.origin == "filings"]
+                if reps:
+                    enrich(reps, None, progress=self.ui.fulltext, budget=20.0)
+                    self.ui.clear_status()
+                    got = sum(1 for e in reps if e.parse.startswith("full-text"))
+                    self.ui.note(f"        full text read for {got}/{len(reps)} results / governance / filing event(s) (headline-only for the rest)", "d")
+            except Exception as e:                                    # never let a body fetch stop a run
+                self.ui.note(f"        full text skipped ({e!r})", "y")
         return events + rest, dropped
 
     def _prep(self, h, items):

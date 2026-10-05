@@ -77,16 +77,17 @@ H = [Holding("BAJAJ-AUTO", "Bajaj Auto", "Autos", "Large")]
 def test_a1_stratified_quotas_and_w1_never_fills_the_budget():
     items = [art("X", f"X Corp update {k}", AS_OF - timedelta(days=k % 365), k) for k in range(400)]
     sel, extras, rep = stratified_sample(items, AS_OF, ["x corp"])
-    assert rep["windows"] == {1: 60, 2: 40, 3: 30, 4: 20} and len(sel) == 150
+    assert rep["windows"] == {1: 40, 2: 25, 3: 20, 4: 15} and len(sel) == 100
     assert all(i.window for i in sel)
 
 
 def test_a1_carry_forward_rolls_to_older_then_back_to_newest():
     items = [art("X", f"X Corp update {k}", AS_OF - timedelta(days=k), k) for k in range(0, 120)]       # nothing older than 120 days
     sel, extras, rep = stratified_sample(items, AS_OF, ["x corp"])
-    # W1 holds 31 (short by 29 -> W2 wants 69, holds 60), W3 holds 29 (wants 39), W4 is empty; nothing is left anywhere to roll back
-    # into, so the sample is every usable article: 120 of the 150 budget. One article a day, so the per-day cap never binds.
-    assert rep["windows"] == {1: 31, 2: 60, 3: 29, 4: 0} and len(sel) == 120
+    # W1 holds 31 (short by 9 -> rolls to W2: 25+9), W3 holds 29 (takes its 20), W4 is empty (its 15 roll back to the newest window with
+    # articles left: W2). One article a day, so the per-day cap never binds. Total budget stays 100.
+    assert rep["windows"] == {1: 31, 2: 49, 3: 20, 4: 0} and len(sel) == 100
+    assert rep["carry"][2].get("rolled_back") == 15
 
 
 def test_a1_per_day_cap_six_rest_become_extra_sources():
@@ -447,14 +448,14 @@ def test_boilerplate_headlines_are_dropped_before_the_model(tmp_path):
 
 def test_budget_scales_the_window_shape_and_is_stamped(tmp_path):
     from sentinelq.sampler import scaled_windows
-    assert [q for _, _, q in scaled_windows(200)] == [80, 53, 40, 27] and [q for _, _, q in scaled_windows(None)] == [60, 40, 30, 20]
-    assert [q for _, _, q in scaled_windows(100)] == [40, 27, 20, 13]                 # the v2.1 document's shape at its budget
+    assert [q for _, _, q in scaled_windows(200)] == [80, 50, 40, 30] and [q for _, _, q in scaled_windows(None)] == [40, 25, 20, 15]
+    assert [q for _, _, q in scaled_windows(150)] == [60, 38, 30, 22]
     assert [q for _, _, q in scaled_windows(None, [60, 40, 30, 20])] == [60, 40, 30, 20]
     items = [art("X", f"X Corp update {k}", AS_OF - timedelta(days=k % 365), k) for k in range(1200)]     # ~3 a day: every window can fill
     sel, _, rep = stratified_sample(items, AS_OF, ["x corp"], windows=scaled_windows(200))
-    assert len(sel) == 200 and rep["windows"] == {1: 80, 2: 53, 3: 40, 4: 27}
+    assert len(sel) == 200 and rep["windows"] == {1: 80, 2: 50, 3: 40, 4: 30}
     res = run(tmp_path, bajaj_auto_year(), H, budget=200)
-    assert "budget 200 (80/53/40/27)" in res["run"]["stamp"]
+    assert "budget 200 (80/50/40/30)" in res["run"]["stamp"]
 
 
 def test_passing_mentions_are_coverage_not_signal_and_model_boilerplate_is_dropped():

@@ -4,12 +4,12 @@ from __future__ import annotations
 from pathlib import Path
 
 # A1 - stratified sampler: (days_from, days_to, article quota), back from as_of. W1 can never fill the whole budget.
-SAMPLE_WINDOWS = [(0, 30, 60), (31, 90, 40), (91, 180, 30), (181, 365, 20)]   # 150; the v2.1 document's 40/25/20/15 = --budget 100
+SAMPLE_WINDOWS = [(0, 30, 40), (31, 90, 25), (91, 180, 20), (181, 365, 15)]   # 100 (the v2.1 document); --budget 150 for the larger sample
 PER_DAY_CAP = 6                 # articles per stock per calendar day counted against the quota; the rest become extra sources
 RESULTS_EVENTS_MAX = 4          # at most four results PRINTS (one per quarter) ...
 RESULTS_OTHER_PER_QUARTER = 3   # ... plus up to three other results-type events per quarter (guidance, order wins, margin notes)
-GOV_PASS_MAX = 40               # (v2.1 document: 30) ...
-GOV_PASS_WINDOWS = [12, 11, 9, 8] # ... filled per window W1..W4 (newest first inside each), shortfalls carried to the next older window
+GOV_PASS_MAX = 30               # (v2.1 document) ...
+GOV_PASS_WINDOWS = [9, 8, 7, 6] # ... filled per window W1..W4 (newest first inside each), shortfalls carried to the next older window
                                 # then back to the newest, so a burst of recent appointment headlines cannot push an older order out
 
 # A3 - clustering

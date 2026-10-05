@@ -60,9 +60,9 @@ def main(argv=None):
     p.add_argument("--governance-cap", type=int, default=30, help="max governance-candidate articles per stock from the 12-month pass")
     p.add_argument("--no-prefilter", action="store_true", help="send generic market-roundup headlines to the model too")
     p.add_argument("--no-disk-cache", action="store_true", help="keep even the label/prose caches in memory only (nothing cached on disk)")
-    p.add_argument("--fetch-text", action="store_true", help="read the body text of EVERY article (slow); by default only results / governance / filing events are read")
-    p.add_argument("--no-fetch-text", action="store_true", help="headline + snippet only, even for results / governance events")
-    p.add_argument("--filings", choices=["bse", "none"], default="bse", help="free exchange announcements as a second source (default bse)")
+    p.add_argument("--fetch-text", action="store_true", help="read the body text of EVERY article (slow)")
+    p.add_argument("--fetch-text-events", action="store_true", help="read the body text of results / governance / filing events only (opt-in)")
+    p.add_argument("--filings", choices=["bse", "none"], default="none", help="free BSE announcements as a second source (opt-in: --filings bse)")
     p.add_argument("--work", default="work", help="dir for hand-off files (file mode)")
     p.add_argument("--corpus-dir", default="audit", help="corpus of record (append-only tables: articles, events, verifications, scores, manifest)")
     p.add_argument("--no-corpus", action="store_true", help="do not append this run to the corpus of record")
@@ -161,7 +161,7 @@ def main(argv=None):
                     news_choice=a.news, golden_file=a.golden_file, corpus_union=not a.no_corpus_union, budget=a.budget,
                     window_quotas=[int(x) for x in a.window_quotas.split(",")] if a.window_quotas else None,
                     filings=(__import__("sentinelq.ingest.filings", fromlist=["BseAnnouncements"]).BseAnnouncements() if a.filings == "bse" and a.news != "file" else None),
-                    fetch_text_events=not a.no_fetch_text)
+                    fetch_text_events=a.fetch_text_events)
     ingested = None
     if a.classifier == "file":
         ingested = pipe.ingest(holdings)
