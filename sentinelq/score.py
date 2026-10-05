@@ -89,7 +89,8 @@ def coverage_map(items: list[LabelledItem], ev: dict) -> dict:
     cwn = round(sum((li.item.confidence if li.item.confidence is not None else 1.0) for li in rel), 1)
     dominated = n >= 6 and max(wc.values() or [0]) / n > WINDOW_DOMINANCE
     zero = [f"W{k}" for k, v in wc.items() if v == 0]
-    text = (" ".join(f"W{k}:{v}" for k, v in wc.items()) + f" · events {n} · results {ev['results']}/{RESULTS_EVENTS_MAX}"
+    anchors = sum(1 for li in rel if li.item.pass_ == "results")
+    text = (" ".join(f"W{k}:{v}" for k, v in wc.items()) + f" · events {n} · results-type {ev['results']} (anchors {anchors}/{RESULTS_EVENTS_MAX})"
             + (f" · T1/T2 share {share:.0%}" if share is not None else "") + f" · conf-weighted n {cwn}")
     if zero:
         text += " · no events in " + ", ".join(zero)

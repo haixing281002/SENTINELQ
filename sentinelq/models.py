@@ -132,7 +132,7 @@ class StockScore:
     evidence_span_days: int | None = None
     governance_ignored: list = field(default_factory=list)   # governance-flagged items deliberately NOT penalised, with why
     # --- Upgrade v2.1 (A4) coverage map, printed on every scorecard row ---
-    coverage_map: str = ""                  # "W1:12 W2:5 W3:4 W4:3 · events 24 · results 4/4 · T1/T2 share 61% · conf-weighted n 15.8"
+    coverage_map: str = ""                  # "W1:12 W2:5 W3:4 W4:3 · events 24 · results-type 9 (anchors 4/4) · T1/T2 share 61% · conf-weighted n 15.8"
     n_events: int = 0
     n_results_events: int = 0
     window_events: dict = field(default_factory=dict)

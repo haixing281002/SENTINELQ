@@ -200,7 +200,7 @@ def build_pdf(path: Path, res: dict, rubric, narr: dict, observations: list[dict
             ("Gov.", 28.3, lambda s, r: P(f"{s.governance_score:g}", CELLC)),
             ("Label", 36.9, lambda s, r: P("FLAG" if s.governance_label == "Flag" else s.governance_label, CELLBC)),
             ("Key corporate action", 109.8, lambda s, r: P(r["key_corporate_action"] or "—", CELL)),
-            ("One-line read", 76.5, lambda s, r: P(r["one_line_read"] + (f'<br/><font color="{MUTED}" size="5.6">{rl(s.coverage_map)}</font>' if s.coverage_map else ""), CELL))]
+            ("One-line read", 76.5, lambda s, r: Paragraph(rl(r["one_line_read"]) + (f'<br/><font color="{MUTED}" size="5.6">{rl(s.coverage_map)}</font>' if s.coverage_map else ""), CELL))]
     cols = [c for c in cols if not (c[0] == "Cap" and not has_cap) and not (c[0] == "Wt" and not has_wt)]
     scale = W / sum(c[1] for c in cols)
     li = [c[0] for c in cols].index("Label")
