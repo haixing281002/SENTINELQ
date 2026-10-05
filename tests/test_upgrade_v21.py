@@ -346,7 +346,7 @@ def test_signal_event_aggregation_reaches_plus_two_and_offset_caps_it():
     terms, mean, rule = sentiment_terms(items, AS_OF, R)
     assert mean == 2.0 and rule.startswith("signal-event mean over 4")                 # thirty neutral notes no longer dilute four beats
     assert sum(1 for t in terms if not t[2]) == 30
-    items.append(mk(50, "earnings_miss", -1))
+    items.append(mk(300, "earnings_miss", -1))                                        # an old miss: small weight, still a material offset
     terms, mean, rule = sentiment_terms(items, AS_OF, R)
     assert mean == 1.49 and "+2 withheld" in rule                                      # with the veto on: +2 needs no material offset
     terms, mean, rule = sentiment_terms(items, AS_OF, load_rubric())
