@@ -396,3 +396,34 @@ def test_cli_dispatches_the_new_commands(tmp_path, capsys):
     with pytest.raises(SystemExit) as e:
         cli.main(["golden"])
     assert e.value.code == 0 and "37/37" in capsys.readouterr().out
+
+
+def test_governance_cap_is_stratified_so_recent_routine_headlines_cannot_crowd_out_an_old_order():
+    from sentinelq.ingest.select import select_governance
+    recent = [art("X", f"X Corp appoints VP {i} as head", AS_OF - timedelta(days=i), i) for i in range(1, 41)]          # 40 routine people items in W1/W2
+    old = art("X", "SEBI order against X Corp over disclosure lapses", AS_OF - timedelta(days=300), 900, "reuters.com")   # one real order in W4
+    legacy = select_governance(recent + [old], [], 30, ["x corp"])
+    assert old not in legacy                                                   # newest-first: the order never makes the 30
+    strat = select_governance(recent + [old], [], 30, ["x corp"], as_of=AS_OF)
+    assert old in strat and len(strat) == 30 and old.window == 4
+
+
+def test_learn_proposes_clean_inflation(tmp_path):
+    from sentinelq import learn as L
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    sc = [{"symbol": f"S{i}", "governance_score": 100, "governance_label": "Clean", "governance_penalties": [], "company_sentiment": 1,
+           "sentiment_note": "", "relevant_articles": 30, "evidence_span_days": 300, "governance_ignored": [{"why": "x"}]} for i in range(12)]
+    (run_dir / "scores.json").write_text(json.dumps(sc))
+    (run_dir / "evidence.json").write_text("[]")
+    (run_dir / "run_meta.json").write_text(json.dumps({"as_of": "2026-10-05"}))
+    kinds = {l["kind"] for l in L.detect(run_dir)}
+    assert "clean_inflation" in kinds
+
+
+def test_label_split_observation_is_deterministic_and_compares_to_previous_run(tmp_path):
+    run(tmp_path, bajaj_auto_year(), H, corpus=tmp_path / "corpus", name="a")
+    res = run(tmp_path, [i for i in bajaj_auto_year() if "ransomware" not in i.title], H, corpus=tmp_path / "corpus", name="b", corpus_union=False)
+    obs = [o for o in res["observations"] if o["title"].startswith("Label split")]
+    assert len(obs) == 1 and "Previous run (" in obs[0]["body"] and "BAJAJ-AUTO (governance 90" in obs[0]["body"]
+    assert "Clean 1 / Watch 0 / Flag 0" in obs[0]["body"] and "Watch 1" in obs[0]["body"].split("Previous run")[1]

@@ -8,7 +8,9 @@ SAMPLE_WINDOWS = [(0, 30, 40), (31, 90, 25), (91, 180, 20), (181, 365, 15)]
 PER_DAY_CAP = 6                 # articles per stock per calendar day counted against the quota; the rest become extra sources
 RESULTS_EVENTS_MAX = 4          # at most four results PRINTS (one per quarter) ...
 RESULTS_OTHER_PER_QUARTER = 3   # ... plus up to three other results-type events per quarter (guidance, order wins, margin notes)
-GOV_PASS_MAX = 30               # unchanged
+GOV_PASS_MAX = 30               # unchanged in total ...
+GOV_PASS_WINDOWS = [9, 8, 7, 6] # ... but filled per window W1..W4 (newest first inside each), shortfalls carried to the next older window
+                                # then back to the newest, so a burst of recent appointment headlines cannot push an older order out
 
 # A3 - clustering
 CLUSTER_DAYS = 2                # two articles may join a cluster if published within this many days ...

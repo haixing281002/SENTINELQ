@@ -201,7 +201,7 @@ class Pipeline:
         if self.governance_pass and hasattr(self.news, "fetch_governance") and not errs:
             try:    # governance is a 12-month rubric: search the whole year for governance events, independent of the latest-N pull
                 gov = self.news.fetch_governance(h, self.as_of - timedelta(days=w["news_days"]), self.as_of)
-                picked = select_governance(gov, items, self.governance_cap, toks)
+                picked = select_governance(gov, items, self.governance_cap, toks, self.as_of if self.stratified else None)
                 if self.stratified:
                     from .sampler import window_of
                     for i in picked:
@@ -393,6 +393,32 @@ class Pipeline:
             added += 1
             used.add(e.get("run_id", ""))
         return {"events": added, "runs": sorted(used)}
+
+    @staticmethod
+    def _split_observation(scores, delta: list[dict]) -> dict:
+        """Label and sentiment split, against the previous stored run when there is one. A lopsided split is a prompt to look, not an error:
+        the rubric is absolute, so a genuinely clean set should look lopsided."""
+        n = len(scores) or 1
+        lab = Counter(s.governance_label for s in scores)
+        sent = Counter("n/a" if s.company_sentiment is None else f"{s.company_sentiment:+d}" for s in scores)
+        body = (f"Governance: Clean {lab.get('Clean', 0)} / Watch {lab.get('Watch', 0)} / Flag {lab.get('Flag', 0)} of {len(scores)}. "
+                f"Sentiment: " + ", ".join(f"{k} x{v}" for k, v in sorted(sent.items(), reverse=True)) + ".")
+        prev = [d for d in delta if d.get("prev_label")]
+        if prev:
+            pl = Counter(d["prev_label"] for d in prev)
+            ps = Counter("n/a" if d["prev_sentiment"] is None else f"{d['prev_sentiment']:+d}" for d in prev)
+            moved = [d for d in prev if d["change"] not in ("unchanged", "new name")]
+            body += (f" Previous run ({prev[0]['prev_run']}): Clean {pl.get('Clean', 0)} / Watch {pl.get('Watch', 0)} / Flag {pl.get('Flag', 0)}; "
+                     f"sentiment " + ", ".join(f"{k} x{v}" for k, v in sorted(ps.items(), reverse=True)) + f". {len(moved)} name(s) moved"
+                     + (": " + "; ".join(f"{d['symbol']} ({d['change']})" for d in moved[:8]) + ("; ..." if len(moved) > 8 else "") if moved else "") + ".")
+        else:
+            body += " No previous stored run to compare against."
+        if lab.get("Clean", 0) / n >= 0.60:
+            body += (f" {lab['Clean']} of {len(scores)} Clean is a high share: check the 'NOT scored' rows and any verified events not applied before "
+                     "reading it as a clean year.")
+        if lab.get("Flag", 0) / n >= 0.30:
+            body += f" {lab['Flag']} of {len(scores)} Flags is a high share: check each Flag's penalties against the verification gate."
+        return {"title": "Label split vs the previous run.", "body": body}
 
     def _delta(self, scores) -> list[dict]:
         """B6 Delta: this run vs the previous stored scores/ table (the last non-replay run), never re-derived from news."""
@@ -740,6 +766,7 @@ class Pipeline:
         ui.clear_status()
         ui.note("  writing portfolio-level observations ...", "d")
         obs = self.narrator.portfolio(portfolio_facts(scores, kept))
+        obs.append(self._split_observation(scores, result.get("delta") or []))      # deterministic; never written by the model
         result.update(narrative=narr, observations=obs, lint=lint)
         if lint:
             ui.note(f"  price-language lint: removed {len(lint)} sentence(s) from sentiment commentary (share-price moves never feed sentiment)", "y")

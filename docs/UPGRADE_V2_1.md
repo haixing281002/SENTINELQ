@@ -24,6 +24,10 @@ are unchanged. Everything below is deterministic Python except the labelling cal
 | One results event per quarter dropped guidance / order-win events | One results print per quarter + up to 3 other results-type events per quarter |
 | Governance events found in one run and lost in the next (Angel One CPO, BoM RBI penalty) | Corpus union: governance events on record from earlier runs, visible at this as-of (B3), same prompt + model, join the run (`origin corpus:<run_id>`, disclosed on page 1). `--no-corpus-union` turns it off. |
 
+Also: the governance search cap (30) is stratified over W1..W4 (9/8/7/6 with carry-forward) so a burst of recent appointment headlines
+cannot push an older regulatory order out; `sentinelq learn propose` raises `clean_inflation` at >= 60 % Clean (mirror of `flag_inflation`);
+and every card carries a deterministic "Label split vs the previous run" observation written by code, not the model.
+
 Two gate refinements the golden set forced, both conventions rather than weights: a stated `minor` severity keeps the minor band
 (-10) even under the Rs 10 cr floor (Natco NPPA, reconciled 82), and a notice on day 1 / probe on day 2-3 that shares two
 distinctive words is one event even when the two headlines were typed differently (Nestle). Raise both with the IC if you disagree.

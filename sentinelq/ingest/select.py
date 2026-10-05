@@ -107,22 +107,48 @@ GOV_QUERY_REGULATORY = ('(SEBI OR RBI OR penalty OR fined OR fine OR "show cause
                         '"demand notice" OR NPPA OR FSSAI OR embezzlement)')
 
 
-def select_governance(items: list, exclude: list, cap: int, tokens: list[str]) -> list:
-    """Governance-candidate articles for the 12-month rubric: title carries a governance keyword, not already in the
-    sentiment set, newest first, capped. They feed governance scoring only - never sentiment."""
+def select_governance(items: list, exclude: list, cap: int, tokens: list[str], as_of=None, quotas: list[int] | None = None) -> list:
+    """Governance-candidate articles for the 12-month rubric: title carries a governance keyword, not already in the sentiment set.
+    With `as_of`, the cap is STRATIFIED over the four sampling windows (quotas, default config.GOV_PASS_WINDOWS; shortfalls carry to the
+    next older window and then back to the newest) so recent routine people headlines cannot crowd out an older regulatory order.
+    Without `as_of` (legacy / inspect), newest first up to `cap`. They feed governance scoring only - never sentiment."""
     seen = {(i.url or "").strip().lower().rstrip("/") for i in exclude}
     seen_t = {re.sub(r"[^a-z0-9]", "", (i.title or "").lower()) for i in exclude}
-    out = []
+    cands = []
     for i in sorted((x for x in items if x.kind == "news"), key=lambda x: (x.published, title_hit(x.title, tokens)), reverse=True):
         k, kt = (i.url or "").strip().lower().rstrip("/"), re.sub(r"[^a-z0-9]", "", (i.title or "").lower())
         if k in seen or kt in seen_t or not GOV_TITLE.search(i.title or ""):
             continue
         seen.add(k)
         seen_t.add(kt)
+        cands.append(i)
+    if as_of is None:
+        out = cands[:cap]
+    else:
+        from ..config import GOV_PASS_WINDOWS
+        from ..sampler import window_of
+        quotas = list(quotas or GOV_PASS_WINDOWS)
+        pools: dict[int, list] = {k: [] for k in range(1, len(quotas) + 1)}
+        for i in cands:
+            i.window = window_of(i.published, as_of)
+            if i.window in pools:
+                pools[i.window].append(i)
+        out, carry = [], 0
+        for k in pools:
+            want = quotas[k - 1] + carry
+            take = pools[k][:want]
+            out += take
+            pools[k] = pools[k][len(take):]
+            carry = want - len(take)
+        for k in pools:                                  # the oldest window was short: the remainder rolls back to the newest
+            if carry <= 0:
+                break
+            take = pools[k][:carry]
+            out += take
+            carry -= len(take)
+        out = out[:cap]
+    for i in out:
         i.purpose = "governance"
-        out.append(i)
-        if len(out) >= cap:
-            break
     return out
 
 

@@ -94,6 +94,13 @@ def detect(run: Path, against: Path | None = None, verified: Path | None = None)
                        "The July v1 card had 14 of 29 Flags, most on a -20 regulatory action. A Flag rate this high usually means misapplied penalties.",
                        [{"symbol": s["symbol"], "score": s["governance_score"], "penalties": [f"{p['event_type']} {p['penalty']:+g}" for p in s["governance_penalties"]]} for s in flags[:8]],
                        "Review each Flag's penalties against the verification gate; add regression cases for any misapplied one.", rid))
+    clean = [s for s in scores if s["governance_label"] == "Clean"]
+    if n >= 10 and len(clean) / n >= 0.60:
+        out.append(_mk("clean_inflation", 5, f"{len(clean)}of{n}", f"{len(clean)} of {n} names are Clean at 100/95 - check for muted or missed penalties",
+                       "The reconciled 3-Jul card had 10 of 29 Clean. A Clean rate this high usually means governance events were not retrieved, were "
+                       "listed-not-scored by a rule, or verified events expired (see 'NOT applied' on page 1).",
+                       [{"symbol": s["symbol"], "score": s["governance_score"], "not_scored": len(s.get("governance_ignored") or [])} for s in clean[:10]],
+                       "Open Evidence - Governance for the Clean names: every 'NOT scored' row is a candidate; add missed events to verified_events.csv.", rid))
     sc = [s["company_sentiment"] for s in scores if s.get("company_sentiment") is not None]
     if len(sc) >= 10 and max(sc) <= 1 and min(sc) >= 0:
         out.append(_mk("compressed_sentiment", 2, f"{n}", "Sentiment is compressed to 0 / +1 across the portfolio (no +2, no negative)",
