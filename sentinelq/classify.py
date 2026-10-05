@@ -12,7 +12,8 @@ from typing import Protocol
 from .models import Label, RawItem
 from .rubric import Rubric
 
-PROMPT_VERSION = "v2"   # v2: adds `substance` (primary / passing / boilerplate)
+PROMPT_VERSION = "v1"            # cache key: v1 labels stay valid - `substance` was added as an optional field (absent = primary)
+PROMPT_REVISION = "v1.1-substance"  # recorded in the manifest; a change that invalidates old labels must bump PROMPT_VERSION itself
 
 SYSTEM = (
     "You are a labelling function for an equity research pipeline. You are given ONE news item "

@@ -48,9 +48,9 @@ and every card carries a deterministic "Label split vs the previous run" observa
   alerts, technical charts ...) are dropped before the model sees them (`boilerplate_headline`).
 - **Same thing conveyed**: results-type events of the same type in the same quarter merge into one event (sources pooled), on top of the
   3-day post-label merge.
-- **Model relevance** (prompt **v2**): the labeller answers `substance` = primary / passing / boilerplate. `boilerplate` is dropped
-  (`model_boilerplate`); `passing` is kept for coverage but excluded from the sentiment mean. Prompt v2 invalidates cached v1 labels (B2):
-  the next run re-labels every event once.
+- **Model relevance** (prompt revision v1.1-substance): the labeller answers `substance` = primary / passing / boilerplate. `boilerplate`
+  is dropped (`model_boilerplate`); `passing` is kept for coverage but excluded from the sentiment mean. The field is optional (absent =
+  primary), so cached v1 labels stay valid and only new articles go to the model.
 
 Rubric v1.5.2: both veto rules are OFF by default. Sentiment is anchored at 0 and is the net weighing of every positive against every
 negative event (recency x confidence); a 0 label is no signal. The switches `plus_two_requires_no_results_offset` and

@@ -12,7 +12,7 @@ from pathlib import Path
 
 from . import __version__
 from .cache import LabelCache, item_key
-from .classify import PROMPT_VERSION, Classifier, to_label
+from .classify import PROMPT_REVISION, PROMPT_VERSION, Classifier, to_label
 from .context import price_context
 from .models import Dropped, Holding, Label, LabelledItem, RawItem
 import time
@@ -490,7 +490,7 @@ class Pipeline:
     def _stamp(self, source_mode: str) -> str:
         """B6 honesty stamp for the scorecard header."""
         shape = "/".join(str(q) for _, _, q in self.windows)
-        return (f"{source_mode} · as_of {self.as_of.isoformat()} · budget {self.budget} ({shape}) · universe {self.universe_hash[:8] or 'n/a'} · prompt {PROMPT_VERSION} · "
+        return (f"{source_mode} · as_of {self.as_of.isoformat()} · budget {self.budget} ({shape}) · universe {self.universe_hash[:8] or 'n/a'} · prompt {PROMPT_VERSION} ({PROMPT_REVISION}) · "
                 f"rubric v{self.r.version} ({self.r.sha256[:8]}) · model_label {self.clf.model_id} · model_verify python-gate")
 
     def _golden_gate(self) -> dict:
@@ -550,7 +550,7 @@ class Pipeline:
                   "insufficient": bool(s.sentiment_note.startswith("INSUFFICIENT")), "triage": s.sentiment_note, "published": run["published"],
                   "source_mode": run["source_mode"], "prompt_version": PROMPT_VERSION, "model_label": self.clf.model_id} for s in scores]
         manifest = {"as_of": self.as_of.isoformat(), "started_at": run["started_at"], "finished_at": now, "source_mode": run["source_mode"],
-                    "universe_hash": self.universe_hash, "universe_n": len(holdings), "prompt_version": PROMPT_VERSION, "rubric_version": self.r.version,
+                    "universe_hash": self.universe_hash, "universe_n": len(holdings), "prompt_version": PROMPT_VERSION, "prompt_revision": PROMPT_REVISION, "rubric_version": self.r.version,
                     "rubric_sha256": self.r.sha256, "model_label": self.clf.model_id, "model_verify": "python-gate", "n_articles": len(articles),
                     "n_events": len(events), "n_llm_calls": self.llm_items, "n_llm_items": self.llm_items, "est_cost_inr": 0.0,
                     "n_scores": len(srows), "published": run["published"], "golden": run["golden"], "sampler": run["sampler"],
