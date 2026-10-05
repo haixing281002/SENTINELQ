@@ -254,7 +254,8 @@ def test_b1_tables_are_append_only_and_hold_no_body_text(tmp_path):
     arts, evs, vers, scs = c.articles(), c.events(), c.load("corpus/verifications"), c.scores()
     assert arts and evs and vers and scs
     assert all(len(a["snippet"] or "") <= 300 for a in arts) and {a["pass"] for a in arts} <= {"sentiment", "results", "governance", "actions"}
-    assert all(e["prompt_version"] == "v1" and e["model_label"] == "keyword-stub" for e in evs)
+    from sentinelq.classify import PROMPT_VERSION
+    assert all(e["prompt_version"] == PROMPT_VERSION and e["model_label"] == "keyword-stub" for e in evs)
     m = c.manifests()[0]
     for k in ("source_mode", "universe_hash", "prompt_version", "rubric_version", "model_label", "model_verify", "n_articles", "n_events", "n_llm_calls", "est_cost_inr", "warnings"):
         assert k in m
@@ -266,7 +267,8 @@ def test_b1_tables_are_append_only_and_hold_no_body_text(tmp_path):
 def test_b2_label_index_is_keyed_on_prompt_and_model(tmp_path):
     run(tmp_path, bajaj_auto_year(), H, corpus=tmp_path / "corpus")
     c = Corpus(tmp_path / "corpus")
-    assert c.label_index("v1", "keyword-stub") and not c.label_index("v2", "keyword-stub") and not c.label_index("v1", "other-model")
+    from sentinelq.classify import PROMPT_VERSION
+    assert c.label_index(PROMPT_VERSION, "keyword-stub") and not c.label_index("v0", "keyword-stub") and not c.label_index(PROMPT_VERSION, "other-model")
 
 
 def test_b6_workbook_and_pdf_carry_the_stamps(tmp_path):
@@ -425,5 +427,51 @@ def test_label_split_observation_is_deterministic_and_compares_to_previous_run(t
     run(tmp_path, bajaj_auto_year(), H, corpus=tmp_path / "corpus", name="a")
     res = run(tmp_path, [i for i in bajaj_auto_year() if "ransomware" not in i.title], H, corpus=tmp_path / "corpus", name="b", corpus_union=False)
     obs = [o for o in res["observations"] if o["title"].startswith("Label split")]
-    assert len(obs) == 1 and "Previous run (" in obs[0]["body"] and "BAJAJ-AUTO (governance 90" in obs[0]["body"]
+    assert len(obs) == 1 and "Previous run (" in obs[0]["body"] and "BAJAJ-AUTO (" in obs[0]["body"] and "governance 90" in obs[0]["body"]
     assert "Clean 1 / Watch 0 / Flag 0" in obs[0]["body"] and "Watch 1" in obs[0]["body"].split("Previous run")[1]
+
+
+def test_boilerplate_headlines_are_dropped_before_the_model(tmp_path):
+    from sentinelq.sampler import is_boilerplate
+    assert is_boilerplate("Marico share price today: stock slips 2%") and is_boilerplate("Should you buy Titan after Q1? Here's why")
+    assert is_boilerplate("Stocks to watch today: Marico, Titan, NMDC") and not is_boilerplate("Marico Q1 net profit rises 21%")
+    items = bajaj_auto_year() + [art("BAJAJ-AUTO", f"Bajaj Auto share price today: live updates {i}", AS_OF - timedelta(days=i), 800 + i) for i in range(5)]
+    res = run(tmp_path, items, H)
+    assert sum(1 for d in res["dropped"] if d.reason == "boilerplate_headline") == 5
+    assert not any("share price today" in li.item.title for li in res["kept"]["BAJAJ-AUTO"])
+
+
+def test_budget_scales_the_window_shape_and_is_stamped(tmp_path):
+    from sentinelq.sampler import scaled_windows
+    assert [q for _, _, q in scaled_windows(200)] == [80, 50, 40, 30] and [q for _, _, q in scaled_windows(None)] == [40, 25, 20, 15]
+    assert [q for _, _, q in scaled_windows(None, [60, 40, 30, 20])] == [60, 40, 30, 20]
+    items = [art("X", f"X Corp update {k}", AS_OF - timedelta(days=k % 365), k) for k in range(1200)]     # ~3 a day: every window can fill
+    sel, _, rep = stratified_sample(items, AS_OF, ["x corp"], windows=scaled_windows(200))
+    assert len(sel) == 200 and rep["windows"] == {1: 80, 2: 50, 3: 40, 4: 30}
+    res = run(tmp_path, bajaj_auto_year(), H, budget=200)
+    assert "budget 200 (80/50/40/30)" in res["run"]["stamp"]
+
+
+def test_passing_mentions_are_coverage_not_signal_and_model_boilerplate_is_dropped():
+    from sentinelq.models import Label, LabelledItem
+    from sentinelq.score import feeds_sentiment
+    from sentinelq.validate import validate_label
+    it = RawItem("X", "news", "Peer comparison: X Corp vs Y Corp margins", "", "https://reuters.com/1", "2026-06-01", "reuters.com")
+    assert not feeds_sentiment(LabelledItem(it, Label("other", 1, "", False, substance="passing")))
+    assert feeds_sentiment(LabelledItem(it, Label("other", 1, "", False, substance="primary")))
+    base = {"event_type": "other", "sentiment": 0, "rationale": "x", "governance_flag": False, "about_company": True}
+    assert validate_label(it, {**base, "substance": "boilerplate"}, R, date(2026, 7, 3), 365) == "model_boilerplate"
+    assert validate_label(it, {**base, "substance": "passing"}, R, date(2026, 7, 3), 365) is None
+
+
+def test_results_type_events_of_the_same_quarter_merge_into_one(tmp_path):
+    from sentinelq.models import Label, LabelledItem
+    from sentinelq.cluster import post_label_merge
+    mk = lambda i, d, t: LabelledItem(RawItem("B", "news", t, "", f"https://o{i}.com/{i}", d.isoformat(), f"o{i}.com", purpose="sentiment", event_date=d.isoformat(),
+                                               event_id=f"e{i}", max_tier="T3", confidence=0.35), Label("earnings_beat", 2, "", False))
+    q = date(2026, 5, 10)
+    evs = [mk(i, q + timedelta(days=5 * i), f"Bajaj Auto Q4 profit {'rises' if i % 2 else 'jumps'} wording {i}") for i in range(4)]   # 20 days apart in all
+    out, merged = post_label_merge(evs, results_types={"earnings_beat"})
+    assert len(out) == 1 and len(merged) == 3 and out[0].item.n_sources == 4
+    out2, _ = post_label_merge(evs, results_types=set())
+    assert len(out2) == 4                                                       # without the quarter rule only the 3-day window applies

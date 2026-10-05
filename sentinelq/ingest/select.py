@@ -128,6 +128,10 @@ def select_governance(items: list, exclude: list, cap: int, tokens: list[str], a
         from ..config import GOV_PASS_WINDOWS
         from ..sampler import window_of
         quotas = list(quotas or GOV_PASS_WINDOWS)
+        if sum(quotas) != cap:                                # --governance-cap other than 30: keep the shape, scale the quotas
+            tot = sum(quotas)
+            quotas = [max(1, round(q * cap / tot)) for q in quotas]
+            quotas[0] += cap - sum(quotas)
         pools: dict[int, list] = {k: [] for k in range(1, len(quotas) + 1)}
         for i in cands:
             i.window = window_of(i.published, as_of)

@@ -406,7 +406,7 @@ def test_generic_market_headlines_are_prefiltered_and_disclosed(tmp_path):
     res = p.run([h])
     reasons = {d.headline: d.reason for d in res["dropped"]}
     assert reasons["Sensex ends 250 pts lower as banks drag"] in ("generic_market_headline", "title_does_not_name_company")
-    assert "Sensex, Nifty rally; Bajaj Finance among top gainers" not in reasons      # names the company: model decides
+    assert reasons.get("Sensex, Nifty rally; Bajaj Finance among top gainers") == "boilerplate_headline"   # names the company, but a market wrap
     assert "Bajaj Finance Q4 profit rises 22%" not in reasons
 
 

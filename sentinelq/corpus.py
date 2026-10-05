@@ -25,7 +25,7 @@ ARTICLE_COLS = ["run_id", "as_of", "symbol", "url", "url_hash", "source_domain",
 EVENT_COLS = ["event_id", "symbol", "event_date", "pass", "n_sources", "n_members", "max_tier", "representative_url", "member_url_hashes",
               "event_type", "sentiment", "is_governance_flag", "governance_flag_type", "justification", "confidence", "window",
               "prompt_version", "model_label", "labelled_at", "run_id", "as_of", "headline", "snippet", "url_hash", "gate_json",
-              "materiality", "historical", "verified", "penalty_override", "source_ref", "members_json", "purpose"]
+              "materiality", "historical", "verified", "penalty_override", "source_ref", "members_json", "purpose", "published_date"]
 VERIFICATION_COLS = ["event_id", "symbol", "subject_is_company", "event_at_company", "direction", "severity", "applied_penalty",
                      "model_verify", "verified_at", "run_id", "basis"]
 SCORE_COLS = ["run_id", "as_of", "symbol", "rubric_version", "rubric_sha256", "sentiment_raw", "sentiment_bucket", "gov_score", "gov_label",

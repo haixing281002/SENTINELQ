@@ -28,6 +28,18 @@ Also: the governance search cap (30) is stratified over W1..W4 (9/8/7/6 with car
 cannot push an older regulatory order out; `sentinelq learn propose` raises `clean_inflation` at >= 60 % Clean (mirror of `flag_inflation`);
 and every card carries a deterministic "Label split vs the previous run" observation written by code, not the model.
 
+## Budget and stricter dropping (after the 5-Oct review)
+
+- `--budget N` scales the four quotas keeping the 40/25/20/15 shape (200 -> 80/50/40/30); `--window-quotas a,b,c,d` sets the shape; the
+  governance cap scales the same way with `--governance-cap`. The budget and shape are in the run stamp.
+- **Boilerplate headlines** (`config.BOILERPLATE_PATTERNS`: share-price-today, buy/sell/hold, stocks-to-watch, live updates, record-date
+  alerts, technical charts ...) are dropped before the model sees them (`boilerplate_headline`).
+- **Same thing conveyed**: results-type events of the same type in the same quarter merge into one event (sources pooled), on top of the
+  3-day post-label merge.
+- **Model relevance** (prompt **v2**): the labeller answers `substance` = primary / passing / boilerplate. `boilerplate` is dropped
+  (`model_boilerplate`); `passing` is kept for coverage but excluded from the sentiment mean. Prompt v2 invalidates cached v1 labels (B2):
+  the next run re-labels every event once.
+
 Two gate refinements the golden set forced, both conventions rather than weights: a stated `minor` severity keeps the minor band
 (-10) even under the Rs 10 cr floor (Natco NPPA, reconciled 82), and a notice on day 1 / probe on day 2-3 that shares two
 distinctive words is one event even when the two headlines were typed differently (Nestle). Raise both with the IC if you disagree.

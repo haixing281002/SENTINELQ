@@ -9,7 +9,17 @@ import re
 from collections import Counter, defaultdict
 from datetime import date
 
-from .config import PER_DAY_CAP, SAMPLE_WINDOWS
+from .config import BOILERPLATE_PATTERNS, PER_DAY_CAP, SAMPLE_WINDOWS
+
+_BOILER = None
+
+
+def is_boilerplate(title: str) -> bool:
+    """Templated price / listicle headline (config.BOILERPLATE_PATTERNS): no event, no model call."""
+    global _BOILER
+    if _BOILER is None:
+        _BOILER = re.compile("|".join(BOILERPLATE_PATTERNS), re.I)
+    return bool(title) and bool(_BOILER.search(title))
 from .ingest.select import is_usable
 from .models import RawItem, parse_date
 
@@ -46,7 +56,11 @@ def stratified_sample(items: list[RawItem], as_of: date, tokens: list[str], wind
             head.members.append({"url": c.url, "source": c.source, "date": c.published, "headline": c.title})
             syndicated += 1
         uniq.append(head)
-    usable = [i for i in uniq if is_usable(i, tokens)]
+    boiler = [i for i in uniq if is_usable(i, tokens) and is_boilerplate(i.title)]
+    for i in boiler:
+        i.sample_extra = False
+        i.boilerplate = True
+    usable = [i for i in uniq if is_usable(i, tokens) and not getattr(i, "boilerplate", False)]
     for i in usable:
         i.window = window_of(i.published, as_of, windows)
     pools: dict[int, list[RawItem]] = {k: [] for k in range(1, len(windows) + 1)}
@@ -100,10 +114,27 @@ def stratified_sample(items: list[RawItem], as_of: date, tokens: list[str], wind
     over = [i for i in usable if id(i) not in picked]
     report = {"windows": {k: taken[k] for k in pools}, "quota": quota, "carry": carry_log, "usable": len(usable),
               "unique_titles": len(uniq), "syndicated": syndicated, "per_day_extra": len(extras), "over_budget": len(over),
-              "budget": sum(quota.values()), "selected": len(selected)}
+              "budget": sum(quota.values()), "selected": len(selected), "boilerplate": len(boiler)}
     return sorted(selected, key=lambda x: (x.published, x.relevance), reverse=True), extras, report
 
 
-def window_counts(items: list, n_windows: int = len(SAMPLE_WINDOWS)) -> dict[int, int]:
+def window_counts(items: list, n_windows: int = 4) -> dict[int, int]:
     c = Counter(getattr(i, "window", None) for i in items)
     return {k: c.get(k, 0) for k in range(1, n_windows + 1)}
+
+
+def scaled_windows(budget: int | None = None, quotas: list[int] | None = None, base=None) -> list[tuple[int, int, int]]:
+    """The four windows with quotas scaled to `budget` (shape kept) or set explicitly; default is the config (40/25/20/15 = 100)."""
+    base = list(base or SAMPLE_WINDOWS)
+    if quotas:
+        if len(quotas) != len(base):
+            raise SystemExit(f"--window-quotas needs {len(base)} numbers (one per window W1..W4)")
+        return [(lo, hi, int(q)) for (lo, hi, _), q in zip(base, quotas)]
+    if budget and budget != sum(q for _, _, q in base):
+        tot = sum(q for _, _, q in base)
+        out = [(lo, hi, max(1, round(q * budget / tot))) for lo, hi, q in base]
+        diff = budget - sum(q for _, _, q in out)                      # rounding: settle the difference on W1
+        lo, hi, q = out[0]
+        out[0] = (lo, hi, q + diff)
+        return out
+    return base

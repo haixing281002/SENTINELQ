@@ -22,7 +22,7 @@ from .score import score_portfolio
 # ------------------------------------------------------------------------------------------------------ helpers
 def event_row_to_item(e: dict) -> LabelledItem:
     gate = _loads(e.get("gate_json")) or {}
-    it = RawItem(e["symbol"], "news", e.get("headline") or "", e.get("snippet") or "", e.get("representative_url") or "", (e.get("event_date") or "")[:10],
+    it = RawItem(e["symbol"], "news", e.get("headline") or "", e.get("snippet") or "", e.get("representative_url") or "", (e.get("published_date") or e.get("event_date") or "")[:10],
                  "", purpose=e.get("purpose") or ("sentiment" if e.get("pass") in ("sentiment", "results") else "governance"),
                  source_ref=e.get("source_ref") or "", verified=e.get("verified") or "", penalty_override=e.get("penalty_override"),
                  origin=e.get("pass") or "", window=e.get("window"), pass_=e.get("pass") or "", event_id=e.get("event_id") or "",
@@ -34,7 +34,8 @@ def event_row_to_item(e: dict) -> LabelledItem:
     lab = Label(e["event_type"], int(e["sentiment"]), e.get("justification") or "", bool(e.get("is_governance_flag")), e.get("materiality"),
                 bool(e.get("historical")), True, subject=gate.get("subject"), occurred_at_company=gate.get("occurred_at_company"),
                 action_stage=gate.get("action_stage"), severity=gate.get("severity"), amount_inr_cr=gate.get("amount_inr_cr"),
-                people_direction=gate.get("people_direction"), role_tier=gate.get("role_tier"), event_key=gate.get("event_key"))
+                people_direction=gate.get("people_direction"), role_tier=gate.get("role_tier"), event_key=gate.get("event_key"),
+                substance=gate.get("substance") or "primary")
     return LabelledItem(it, lab, from_cache=True)
 
 

@@ -46,6 +46,7 @@ class RawItem:
     confidence: float | None = None      # deterministic: min(1, 0.40 + 0.15 ln(1+n_sources)) * tier_weight
     member_url_hashes: list = field(default_factory=list)
     members: list = field(default_factory=list)   # other articles in the cluster: {url, source, date, headline, tier}
+    boilerplate: bool = False
 
 
 @dataclass
@@ -66,6 +67,7 @@ class Label:
     people_direction: str | None = None     # unplanned_exit | planned_exit_or_succession | appointment | promotion_or_elevation | reappointment | n/a
     role_tier: str | None = None            # cxo_cs_cfo_compliance | senior_management | below_cxo | non_executive_director | n/a
     event_key: str | None = None            # short id of the underlying real-world event, for same-event de-duplication
+    substance: str = "primary"              # primary | passing (the company is a mention, not the subject) | boilerplate (templated, no event)
 
 
 @dataclass
@@ -87,7 +89,7 @@ class LabelledItem:
         if self.label:
             d.update(subject=self.label.subject, occurred_at_company=self.label.occurred_at_company, action_stage=self.label.action_stage,
                      severity=self.label.severity, amount_inr_cr=self.label.amount_inr_cr, people_direction=self.label.people_direction,
-                     role_tier=self.label.role_tier, event_key=self.label.event_key, source_ref=self.item.source_ref,
+                     role_tier=self.label.role_tier, event_key=self.label.event_key, substance=self.label.substance, source_ref=self.item.source_ref,
                      verified=self.item.verified, penalty_override=self.item.penalty_override)
             d.update(event_type=self.label.event_type, sentiment=self.label.sentiment,
                      rationale=self.label.rationale,

@@ -110,7 +110,8 @@ class Pipeline:
                  disk_cache: bool = True, governance_pass: bool = True, governance_cap: int = 30,
                  fundamentals_pass: bool = True, fundamentals_cap: int = 40, retrieval_mode: str = "live", run_date: date | None = None,
                  verified_events: str | Path | None = None, universe_hash: str = "", stratified: bool = True,
-                 corpus_dir: str | Path | None = None, news_choice: str = "", golden_file: str | Path | None = None, corpus_union: bool = True):
+                 corpus_dir: str | Path | None = None, news_choice: str = "", golden_file: str | Path | None = None, corpus_union: bool = True,
+                 budget: int | None = None, window_quotas: list[int] | None = None):
         self.r, self.news, self.actions, self.prices, self.clf = rubric, news, actions, prices, classifier
         self.out = Path(out_dir)
         self.cache = LabelCache(cache_path if disk_cache else None)   # label cache holds hash -> label only, no article text
@@ -131,6 +132,9 @@ class Pipeline:
         self._key = lambda i: item_key(i.url, i.title, i.snippet, self.clf.model_id, PROMPT_VERSION)
         # ---- Upgrade v2.1: stratified sampler + event clustering (A1/A3) and the corpus of record (B1-B3)
         self.stratified, self.news_choice, self.golden_file, self.corpus_union = stratified, news_choice, golden_file, corpus_union
+        from .sampler import scaled_windows
+        self.windows = scaled_windows(budget, window_quotas)
+        self.budget = sum(q for _, _, q in self.windows)
         self.started = datetime.now()
         self._sample_reports: dict[str, dict] = {}
         self._extras: dict[str, list] = {}
@@ -169,7 +173,7 @@ class Pipeline:
             acts = [i for i in items if i.kind != "news"]
             for a in acts:
                 a.pass_ = "actions"
-            selected, extras, rep = stratified_sample(news_all, self.as_of, toks)
+            selected, extras, rep = stratified_sample(news_all, self.as_of, toks, windows=self.windows)
             for i in selected + extras:
                 i.pass_, i.purpose = "sentiment", "sentiment"
             self._sample_reports[h.symbol], self._extras[h.symbol] = rep, extras
@@ -178,6 +182,7 @@ class Pipeline:
             for i in news_all:
                 why = "" if id(i) in chosen else ("syndicated_duplicate" if any(m["url"] == i.url for sel in selected + extras for m in sel.members)
                                                   else "title_does_not_name_company" if not any(t in (i.title or "").lower() for t in toks)
+                                                  else "boilerplate_headline" if i.boilerplate
                                                   else "outside_lookback" if i.window is None else "over_budget")
                 seen_rows.append(self._article_row(i, why))
                 if why and why != "syndicated_duplicate":
@@ -193,7 +198,7 @@ class Pipeline:
                 if self.stratified:                                   # mandatory anchors, outside the budget (A1)
                     from .sampler import window_of
                     for i in picked:
-                        i.pass_, i.window = "results", window_of(i.published, self.as_of)
+                        i.pass_, i.window = "results", window_of(i.published, self.as_of, self.windows)
                     self._articles_seen.setdefault(h.symbol, []).extend(self._article_row(i, "") for i in picked)
                 items += picked
             except Exception as e:
@@ -205,7 +210,7 @@ class Pipeline:
                 if self.stratified:
                     from .sampler import window_of
                     for i in picked:
-                        i.pass_, i.window = "governance", window_of(i.published, self.as_of)
+                        i.pass_, i.window = "governance", window_of(i.published, self.as_of, self.windows)
                     self._articles_seen.setdefault(h.symbol, []).extend(self._article_row(i, "") for i in picked)
                 items += picked
             except Exception as e:
@@ -301,7 +306,7 @@ class Pipeline:
             if rep:
                 ws = " ".join(f"W{k}:{rep['windows'][k]}/{rep['quota'][k]}" for k in rep["windows"])
                 back = sum(c.get("rolled_back", 0) for c in rep["carry"].values())
-                ui.note(f"        stratified sample: {ws} = {rep['selected']}/{rep['budget']} ({rep['usable']} usable titles; "
+                ui.note(f"        stratified sample: {ws} = {rep['selected']}/{rep['budget']} ({rep['usable']} usable titles; {rep.get('boilerplate', 0)} boilerplate dropped; "
                         f"{rep['per_day_extra']} per-day extras ride as sources; {rep['syndicated']} syndicated copies"
                         + (f"; {back} carried back to the newest windows" if back else "") + ")", "d")
             ui.ingest_stock(idx, n, h, found, len(nn), len(items) - len(nn) - gv, Counter(i.style for i in nn), False, err_txt,
@@ -450,7 +455,8 @@ class Pipeline:
 
     def _stamp(self, source_mode: str) -> str:
         """B6 honesty stamp for the scorecard header."""
-        return (f"{source_mode} · as_of {self.as_of.isoformat()} · universe {self.universe_hash[:8] or 'n/a'} · prompt {PROMPT_VERSION} · "
+        shape = "/".join(str(q) for _, _, q in self.windows)
+        return (f"{source_mode} · as_of {self.as_of.isoformat()} · budget {self.budget} ({shape}) · universe {self.universe_hash[:8] or 'n/a'} · prompt {PROMPT_VERSION} · "
                 f"rubric v{self.r.version} ({self.r.sha256[:8]}) · model_label {self.clf.model_id} · model_verify python-gate")
 
     def _golden_gate(self) -> dict:
@@ -481,7 +487,7 @@ class Pipeline:
                     continue
                 it, lab = li.item, li.label
                 gate = {k: getattr(lab, k) for k in ("subject", "occurred_at_company", "action_stage", "severity", "amount_inr_cr",
-                                                    "people_direction", "role_tier", "event_key")}
+                                                    "people_direction", "role_tier", "event_key", "substance")}
                 events.append({"event_id": it.event_id or url_hash(it.url), "symbol": it.symbol, "event_date": it.event_date or it.published,
                                "pass": it.pass_ or ("verified" if it.verified else "sentiment"), "n_sources": it.n_sources, "n_members": it.n_members,
                                "max_tier": it.max_tier or tier_of(domain_of(it.url, it.source)), "representative_url": it.url,
@@ -492,7 +498,7 @@ class Pipeline:
                                "labelled_at": now, "run_id": run_id, "as_of": self.as_of.isoformat(), "headline": it.title,
                                "snippet": (it.snippet or "")[:300], "url_hash": url_hash(it.url), "gate_json": gate, "materiality": lab.materiality,
                                "historical": lab.historical, "verified": it.verified, "penalty_override": it.penalty_override,
-                               "source_ref": it.source_ref, "members_json": it.members, "purpose": it.purpose})
+                               "source_ref": it.source_ref, "members_json": it.members, "purpose": it.purpose, "published_date": it.published})
         for s in scores:
             for p in s.governance_penalties:
                 v = p.get("verification", {})
@@ -555,6 +561,7 @@ class Pipeline:
         return {"news_source": type(self.news).__name__ if self.news else None, "actions_source": type(self.actions).__name__ if self.actions else None,
                 "prices_source": type(self.prices).__name__ if self.prices else None, "max_articles_per_stock": self.max_articles,
                 "governance_pass": self.governance_pass, "governance_cap": self.governance_cap, "full_text": self.fetch_text,
+                "budget": self.budget, "windows": self.windows,
                 "generic_headline_prefilter": self.prefilter, "as_of": self.as_of.isoformat(), "mode": self.mode,
                 "retrieval_mode": self.retrieval_mode, "run_date": self.run_date.isoformat(), "universe_hash": self.universe_hash[:12],
                 "fundamentals_pass": self.fundamentals_pass, "fundamentals_cap": self.fundamentals_cap,
@@ -625,7 +632,7 @@ class Pipeline:
             kept.append(li)
             ev[li.label.event_type] += 1
         if self.stratified:                      # A3 stage 3: post-label merge (same type, same flag, within 3 days = one event)
-            kept, merged = post_label_merge(kept)
+            kept, merged = post_label_merge(kept, results_types=set(self.r["sentiment"]["results_event_types"]))
             for keep_, drop_ in merged:
                 self._merges.append({"symbol": h.symbol, "kept": keep_.item.title, "kept_date": keep_.item.published, "merged": drop_.item.title,
                                      "merged_date": drop_.item.published, "event_type": keep_.label.event_type, "event_id": keep_.item.event_id})

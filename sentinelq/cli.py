@@ -64,6 +64,8 @@ def main(argv=None):
     p.add_argument("--work", default="work", help="dir for hand-off files (file mode)")
     p.add_argument("--corpus-dir", default="audit", help="corpus of record (append-only tables: articles, events, verifications, scores, manifest)")
     p.add_argument("--no-corpus", action="store_true", help="do not append this run to the corpus of record")
+    p.add_argument("--budget", type=int, default=None, help="sentiment-pass article budget (default 100 = 40/25/20/15 over W1..W4; the shape is kept)")
+    p.add_argument("--window-quotas", default=None, help="explicit quotas for W1,W2,W3,W4 e.g. 60,40,30,20 (overrides --budget)")
     p.add_argument("--no-corpus-union", action="store_true", help="do not add governance events already on record (earlier runs) to this run")
     p.add_argument("--legacy-sampler", action="store_true", help="latest-N newest-first sampling (pre-v2.1) instead of the stratified windows")
     p.add_argument("--golden-file", default=None, help="regression set (default audit/golden/governance_37.jsonl); failing it stamps published=false")
@@ -154,7 +156,8 @@ def main(argv=None):
                     governance_pass=not a.no_governance_pass, governance_cap=a.governance_cap,
                     fundamentals_pass=not a.no_fundamentals_pass, fundamentals_cap=a.fundamentals_cap,
                     disk_cache=not a.no_disk_cache, stratified=not a.legacy_sampler, corpus_dir=None if a.no_corpus else a.corpus_dir,
-                    news_choice=a.news, golden_file=a.golden_file, corpus_union=not a.no_corpus_union)
+                    news_choice=a.news, golden_file=a.golden_file, corpus_union=not a.no_corpus_union, budget=a.budget,
+                    window_quotas=[int(x) for x in a.window_quotas.split(",")] if a.window_quotas else None)
     ingested = None
     if a.classifier == "file":
         ingested = pipe.ingest(holdings)

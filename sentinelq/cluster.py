@@ -168,9 +168,16 @@ def attach_extras(events: list[RawItem], extras: list[RawItem], alias_toks: set[
     return unplaced
 
 
-def post_label_merge(labelled: list[LabelledItem], days: int = MERGE_DAYS) -> tuple[list[LabelledItem], list[tuple[LabelledItem, LabelledItem]]]:
+def _quarter(d: str) -> str:
+    return f"{d[:4]}Q{(int(d[5:7]) - 1) // 3 + 1}" if d and len(d) >= 7 else ""
+
+
+def post_label_merge(labelled: list[LabelledItem], days: int = MERGE_DAYS, results_types: set[str] | None = None) -> tuple[list[LabelledItem], list[tuple[LabelledItem, LabelledItem]]]:
     """Stage 3: same event_type + same governance flag + event dates within `days` -> ONE event (sources pooled, confidence recomputed).
-    The survivor is the higher-tier (then earlier) representative. Returns (events, merged_pairs) for the audit."""
+    Results-type events (results_types) of the same type in the same QUARTER are also one event: a Q1 beat reported by eight outlets over
+    two weeks is one thing being conveyed. The survivor is the higher-tier (then earlier) representative. Returns (events, merged_pairs)."""
+    from .config import MERGE_RESULTS_SAME_QUARTER
+    rt = results_types if (MERGE_RESULTS_SAME_QUARTER and results_types) else set()
     out: list[LabelledItem] = []
     merged = []
     for li in sorted(labelled, key=lambda x: (x.item.published, x.item.title)):
@@ -185,6 +192,9 @@ def post_label_merge(labelled: list[LabelledItem], days: int = MERGE_DAYS) -> tu
                 continue
             gap = _days_apart(o.item.event_date or o.item.published, li.item.event_date or li.item.published)
             if gap is not None and gap <= days:
+                target = o
+                break
+            if li.label.event_type in rt and _quarter(o.item.published) == _quarter(li.item.published) and o.item.purpose == li.item.purpose:
                 target = o
                 break
         if target is None:

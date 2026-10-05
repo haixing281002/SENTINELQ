@@ -31,7 +31,9 @@ def event_weight(li: LabelledItem, as_of: date, r: Rubric) -> float:
 
 
 def feeds_sentiment(li: LabelledItem) -> bool:
-    return li.item.kind == "news" and li.item.purpose == "sentiment" and li.label.event_type != "price_move"
+    """News from the sentiment / results passes, not price-only, and substantively about the company (a passing mention is coverage, not signal)."""
+    return (li.item.kind == "news" and li.item.purpose == "sentiment" and li.label.event_type != "price_move"
+            and getattr(li.label, "substance", "primary") != "passing")
 
 
 def sentiment_terms(items: list[LabelledItem], as_of: date, r: Rubric) -> tuple[list[tuple[LabelledItem, float, bool, str]], float | None, str]:

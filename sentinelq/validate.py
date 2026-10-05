@@ -39,6 +39,10 @@ def validate_label(item: RawItem, label_dict: dict | None, r: Rubric,
         return "invalid_about_company"
     if label_dict.get("about_company") is False:
         return "not_about_company"
+    if label_dict.get("substance") not in (None, "primary", "passing", "boilerplate"):
+        return f"invalid_substance:{label_dict.get('substance')}"
+    if label_dict.get("substance") == "boilerplate":
+        return "model_boilerplate"
     if "historical" in label_dict and not isinstance(label_dict["historical"], bool):
         return "invalid_historical"
     bad = _check_gate(label_dict, r)

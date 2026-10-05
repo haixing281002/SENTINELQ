@@ -12,7 +12,7 @@ from typing import Protocol
 from .models import Label, RawItem
 from .rubric import Rubric
 
-PROMPT_VERSION = "v1"
+PROMPT_VERSION = "v2"   # v2: adds `substance` (primary / passing / boilerplate)
 
 SYSTEM = (
     "You are a labelling function for an equity research pipeline. You are given ONE news item "
@@ -40,6 +40,9 @@ SYSTEM = (
     "abrupt exit; appointment, promotion_or_elevation, reappointment and planned succession are NEVER exits) and role_tier. "
     "HARD RULES: an appointment, promotion or reappointment is never management_exit; macro or sector policy is never company regulatory_action; "
     "a bank or company that is the victim of fraud is not the subject. "
+    "SUBSTANCE: also answer substance = 'primary' if the item is substantively about the named company (an event, a result, a decision, "
+    "a regulator's action); 'passing' if the company is only mentioned (a peer comparison, a list, a sector piece, a broker's screen); "
+    "'boilerplate' if it is a templated piece with no event (share-price-today, buy-sell-hold, stocks-to-watch, live-updates, technical charts). "
     "PRICE RULE: never reason from share-price moves, 52-week highs or sell-offs. An item that is only about the share price is event_type 'price_move' with sentiment 0. "
     "GOVERNANCE TYPES - the penalty depends on picking the right one: "
     "management_exit = an UNPLANNED departure (resignation, termination, abrupt exit) of a CEO, MD, CFO, any 'Chief ... Officer' "
@@ -73,6 +76,7 @@ def tool_schema(r: Rubric) -> dict:
                 "materiality": {"type": "string", "enum": r["materiality_levels"]},
                 "historical": {"type": "boolean"},
                 "about_company": {"type": "boolean"},
+                "substance": {"type": "string", "enum": ["primary", "passing", "boilerplate"]},
                 "subject": {"type": "string", "enum": ["company", "subsidiary", "promoter_or_insider", "victim", "lender_or_counterparty",
                                                        "peer_or_sector", "macro_policy", "shareholders", "other"]},
                 "occurred_at_company": {"type": "boolean"},
@@ -195,7 +199,7 @@ class KeywordClassifier:
         text = f"{item.title} {item.snippet}".lower()
         if company.split()[0].lower() not in text:
             lab = {"event_type": "other", "sentiment": 0, "rationale": "Company not named in text.",
-                   "governance_flag": False, "about_company": False}
+                   "governance_flag": False, "about_company": False, "substance": "passing"}
             return lab, json.dumps(lab)
         for pat, et, s, g in _RULES:
             if re.search(pat, text):
@@ -203,7 +207,7 @@ class KeywordClassifier:
                     s = -1 if "downgrade" in text else 1 if "upgrade" in text else 0
                 lab = {"event_type": et, "sentiment": s,
                        "rationale": f"Keyword match on '{pat.split('|')[0]}' in headline.",
-                       "governance_flag": g, "about_company": True}
+                       "governance_flag": g, "about_company": True, "substance": "primary"}
                 if g:      # offline stand-in for the verification gate: assume the company is the subject and the matter is material
                     lab.update(subject="company", occurred_at_company=True, severity="integrity" if et in ("regulatory_action", "auditor_resignation", "auditor_restatement") else "material")
                     if et in ("management_exit", "management_change_routine"):
@@ -212,7 +216,7 @@ class KeywordClassifier:
                     lab["action_stage"] = {"regulatory_action": "order_or_settlement", "investigation": "investigation"}.get(et, "routine" if et == "management_change_routine" else "n/a")
                 return lab, json.dumps(lab)
         lab = {"event_type": "other", "sentiment": 0, "rationale": "No taxonomy match in text.",
-               "governance_flag": False, "about_company": True}
+               "governance_flag": False, "about_company": True, "substance": "primary"}
         return lab, json.dumps(lab)
 
 
@@ -222,4 +226,4 @@ def to_label(d: dict) -> Label:
                  relevant=bool(d.get("about_company", True)),
                  subject=d.get("subject"), occurred_at_company=d.get("occurred_at_company"), action_stage=d.get("action_stage"),
                  severity=d.get("severity"), amount_inr_cr=d.get("amount_inr_cr"), people_direction=d.get("people_direction"),
-                 role_tier=d.get("role_tier"), event_key=d.get("event_key"))
+                 role_tier=d.get("role_tier"), event_key=d.get("event_key"), substance=d.get("substance") or "primary")
