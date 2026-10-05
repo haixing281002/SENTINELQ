@@ -1,5 +1,5 @@
 {
-  "version": "1.5.1",
+  "version": "1.5.2",
   "_note": "Single source of truth for every weight, penalty and taxonomy entry. Scores change only if this file changes. Values marked 'assumed' were not stated in the architecture document and should be confirmed by the committee.",
   "event_types": [
     "earnings_beat",
@@ -62,9 +62,9 @@
     "insufficient_note": "Below the minimum evidence standard sentiment reports Insufficient Data rather than a forced +1 or 0 (Reconciliation fix 6).",
     "aggregation": "signal_events",
     "min_signal_events": 3,
-    "plus_two_requires_no_results_offset": true,
-    "aggregation_note": "A 0 label means no signal; the mean is taken over non-zero events (confidence x recency weighted) so the rubric's +2 / -1 anchors are reachable. Falls back to the all-event mean below min_signal_events. +2 only with no material results-type offset in the window. Mirror rule for the -1 anchor: when the results-type evidence itself (prints, guidance) is negative on balance (its weighted mean <= results_dominance_threshold), sentiment is capped at -1 whatever the launches and broker notes say - 'material earnings deterioration dominates the year even if partial offsets exist'.",
-    "minus_one_when_results_negative": true,
+    "plus_two_requires_no_results_offset": false,
+    "aggregation_note": "Anchored at 0: a 0 label is no signal and neither adds nor subtracts. Every non-zero event pulls in its direction with recency x confidence weight; the score is the net of all positives against all negatives (falls back to the all-event mean below min_signal_events). The two veto rules (plus_two_requires_no_results_offset, minus_one_when_results_negative) are OFF: the IC can switch them on if it decides results prints should override the net weighing.",
+    "minus_one_when_results_negative": false,
     "results_dominance_threshold": -0.5
   },
   "governance": {

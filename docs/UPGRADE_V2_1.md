@@ -40,7 +40,11 @@ and every card carries a deterministic "Label split vs the previous run" observa
   (`model_boilerplate`); `passing` is kept for coverage but excluded from the sentiment mean. Prompt v2 invalidates cached v1 labels (B2):
   the next run re-labels every event once.
 
-Rubric v1.5.1 adds the mirror of the +2 rule: when the results-type evidence (prints, guidance) is negative on balance (weighted mean
+Rubric v1.5.2: both veto rules are OFF by default. Sentiment is anchored at 0 and is the net weighing of every positive against every
+negative event (recency x confidence); a 0 label is no signal. The switches `plus_two_requires_no_results_offset` and
+`minus_one_when_results_negative` stay in the rubric for the IC to turn on if results prints should override the net weighing.
+
+Rubric v1.5.1 added the mirror of the +2 rule: when the results-type evidence (prints, guidance) is negative on balance (weighted mean
 <= -0.5), sentiment is capped at -1 whatever the launches and broker notes say - the rubric's own "-1 = material deterioration dominates
 the year even if partial offsets exist" (the Natco case). Without it an averaging method lets seven small positives outvote two bad prints.
 

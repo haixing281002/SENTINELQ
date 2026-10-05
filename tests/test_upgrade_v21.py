@@ -340,6 +340,7 @@ def test_orderly_succession_with_named_successor_is_not_an_exit():
 def test_signal_event_aggregation_reaches_plus_two_and_offset_caps_it():
     from sentinelq.models import Label, LabelledItem
     from sentinelq.score import sentiment_terms
+    R = load_rubric(overrides={"sentiment": {"plus_two_requires_no_results_offset": True}})     # the veto is off by default; test it switched on
     mk = lambda i, et, sent: LabelledItem(RawItem("B", "news", f"h{i}", "", f"https://reuters.com/{i}", (AS_OF - timedelta(days=i)).isoformat(), "reuters.com",
                                                    confidence=0.5, pass_="results" if et.startswith("earn") else "sentiment"), Label(et, sent, "", False))
     items = [mk(i, "earnings_beat", 2) for i in range(4)] + [mk(10 + i, "analyst_action", 0) for i in range(30)]
@@ -348,7 +349,9 @@ def test_signal_event_aggregation_reaches_plus_two_and_offset_caps_it():
     assert sum(1 for t in terms if not t[2]) == 30
     items.append(mk(50, "earnings_miss", -1))
     terms, mean, rule = sentiment_terms(items, AS_OF, R)
-    assert mean == 1.49 and "+2 withheld" in rule                                      # the rubric's own anchor: +2 needs no material offset
+    assert mean == 1.49 and "+2 withheld" in rule                                      # with the veto on: +2 needs no material offset
+    terms, mean, rule = sentiment_terms(items, AS_OF, load_rubric())
+    assert mean > 1.49 and "withheld" not in rule                                      # default: pure net weighing, no veto
     few = [mk(0, "earnings_beat", 2)] + [mk(10 + i, "analyst_action", 0) for i in range(5)]
     assert sentiment_terms(few, AS_OF, R)[2].startswith("all-event")                   # below min_signal_events: fall back
 
@@ -478,14 +481,18 @@ def test_results_type_events_of_the_same_quarter_merge_into_one(tmp_path):
 
 
 def test_negative_results_dominate_many_small_positives_natco_pattern():
-    """Reconciliation: Natco keeps -1 - a 40% revenue fall is the rubric's definition of -1; approvals and launches are offsets, not reversals."""
+    """The results-dominance veto is OFF by default (pure net weighing: seven positives outweigh two bad prints -> 0). Switched on, the
+    Reconciliation's Natco reading applies: a 40% revenue fall is -1 whatever the launches say."""
     from sentinelq.models import Label, LabelledItem
     from sentinelq.score import sentiment_terms, to_integer
+    R = load_rubric(overrides={"sentiment": {"minus_one_when_results_negative": True}})
     mk = lambda i, et, sent, res=False: LabelledItem(RawItem("N", "news", f"h{i}", "", f"https://reuters.com/{i}", (AS_OF - timedelta(days=i)).isoformat(),
                                                              "reuters.com", confidence=0.5, pass_="results" if res else "sentiment"), Label(et, sent, "", False))
     items = [mk(1, "earnings_miss", -2, True), mk(40, "earnings_miss", -2, True)] + [mk(5 + i, "product_launch", 1) for i in range(7)]
+    terms, mean, rule = sentiment_terms(items, AS_OF, load_rubric())
+    assert to_integer(mean) == 0 and "capped" not in rule                               # default: net weighing
     terms, mean, rule = sentiment_terms(items, AS_OF, R)
-    assert to_integer(mean) == -1 and "capped at -1" in rule
+    assert to_integer(mean) == -1 and "capped at -1" in rule                            # veto on
     items += [mk(3, "guidance_change", 2, True), mk(8, "earnings_beat", 2, True)]     # results evidence no longer negative on balance
     terms, mean, rule = sentiment_terms(items, AS_OF, R)
     assert to_integer(mean) >= 0 and "capped" not in rule
