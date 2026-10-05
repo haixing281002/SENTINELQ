@@ -13,6 +13,17 @@ are unchanged. Everything below is deterministic Python except the labelling cal
 | A3 clustering | `sentinelq/cluster.py` | Stage 1 lexical union-find (<= 2 days apart and Jaccard >= 0.5 or >= 3 shared distinctive tokens). Representative = highest tier, then first report, then longest snippet. Stage 2 one model call per cluster. Stage 3 post-label merge: same event_type + same governance flag within 3 days = one event. `conf = min(1, 0.40 + 0.15 ln(1 + n_sources)) * tier_weight`. |
 | A4 event scoring | `sentinelq/score.py` | Sentiment = sum(w_recency * conf * s) / sum(w_recency * conf) over sentiment + results events (price_move excluded, half-life 60 trading days unchanged). Governance: one penalty per verified event through the existing gate; an event with conf < 0.4 and no T1/T2 source is listed, not penalised, with the reason. Minimum evidence: >= 6 events, >= 2 windows, >= 1 results event, else Insufficient Data. Coverage map on every row: `W1:12 W2:5 W3:4 W4:3 · events 24 · results-type 9 (anchors 4/4) · T1/T2 share 61% · conf-weighted n 15.8`; a window with zero events is named in words. |
 
+## Changes after the first live run (5 Oct 2026 card)
+
+| Problem seen | Fix |
+|---|---|
+| The conf < 0.4 rule muted genuine penalties (Angel One CPO, HindCopper fines, BoM CCO, Nestle FSSAI): Google News collapses syndication so one link per event is normal | A gate-verified event is always penalised; low confidence is printed on the penalty ("single lower-tier source, conf 0.35 - verify against the filing"). Golden penalise items now carry single-T3-source fields so this cannot regress. |
+| "In-force" verified events tied to 3-Jul were skipped silently in October | `standing` column (Bosch MNC discount = yes; status `convention` is standing); skipped verified rows printed on PDF page 1 and in RUN_RECORD |
+| Sentiment compressed to 0 / +1 (16 / 13, no +2) | Rubric v1.5.0 `sentiment.aggregation = signal_events`: 0 = no signal, the mean runs over non-zero events (>= 3, else all-event fallback); +2 only with no material results-type offset. Weights unchanged. |
+| Orderly successions scored as exits (Nestle CFO, Cummins MD) | "to step down / successor named / to take over" without abrupt wording = planned exit, not penalised, flagged to verify |
+| One results event per quarter dropped guidance / order-win events | One results print per quarter + up to 3 other results-type events per quarter |
+| Governance events found in one run and lost in the next (Angel One CPO, BoM RBI penalty) | Corpus union: governance events on record from earlier runs, visible at this as-of (B3), same prompt + model, join the run (`origin corpus:<run_id>`, disclosed on page 1). `--no-corpus-union` turns it off. |
+
 Two gate refinements the golden set forced, both conventions rather than weights: a stated `minor` severity keeps the minor band
 (-10) even under the Rs 10 cr floor (Natco NPPA, reconciled 82), and a notice on day 1 / probe on day 2-3 that shares two
 distinctive words is one event even when the two headlines were typed differently (Nestle). Raise both with the IC if you disagree.

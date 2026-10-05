@@ -156,6 +156,12 @@ def build_pdf(path: Path, res: dict, rubric, narr: dict, observations: list[dict
         st.append(P("Retrospective run: " + retr["note"], NOTE))
     elif retr.get("mode") == "replay":
         st.append(P("Replay: " + retr["note"], NOTE))
+    vsk = (res["run"].get("verified") or {}).get("skipped") or []
+    if vsk:
+        st.append(P(f"Human-verified evidence NOT applied at this as-of date ({len(vsk)}): " + "; ".join(f"{x['symbol']}: {x['headline'][:70]} ({x['why']})" for x in vsk[:8]) + ("; ..." if len(vsk) > 8 else "") + ". Re-verify these for the new date.", NOTE))
+    cu = res["run"].get("corpus_union") or {}
+    if cu.get("events"):
+        st.append(P(f"Corpus union: {cu['events']} governance event(s) already on record from earlier run(s) ({', '.join(cu['runs'])}) were added to this run's evidence (same prompt and model).", NOTE))
     if res["run"].get("stamp"):                            # Upgrade v2.1 B6: the honesty stamp is printed, not optional
         stamp = res["run"]["stamp"]
         if res["run"].get("source_mode") == "backdated-live-NOT-PIT":

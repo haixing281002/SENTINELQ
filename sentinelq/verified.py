@@ -3,7 +3,8 @@ merged into the labelled evidence and re-scored once under the one rubric - neve
 
 Columns: symbol, date, headline, event_type, sentiment, subject, severity, action_stage, people_direction, role_tier, amount_inr_cr,
 event_key, penalty_override, status (verified|provisional|convention), valid_as_of, source_ref, url, note.
-`date` blank = "in force at the as-of date": applied only when the run's as-of equals `valid_as_of` (so a July fact is never injected into a different date).
+`date` blank = "in force at the as-of date": applied only when the run's as-of equals `valid_as_of` (so a July fact is never injected into a different date),
+unless `standing` = yes (or status = convention): a structural convention such as the MNC-subsidiary discount applies at every as-of.
 `penalty_override` = a weight a person set; it is recorded in the audit and not second-guessed by the gate."""
 from __future__ import annotations
 import csv
@@ -28,7 +29,8 @@ def load_verified(path: str | Path, as_of: date, lookback_days: int, symbols: se
                     continue
                 published = d
             else:
-                if (r.get("valid_as_of") or "").strip() != as_of.isoformat():
+                standing = (r.get("standing") or "").strip().lower() in ("yes", "true", "1") or (r.get("status") or "").strip() == "convention"
+                if not standing and (r.get("valid_as_of") or "").strip() != as_of.isoformat():
                     skipped.append({"symbol": sym, "headline": r["headline"], "why": f"verified for as-of {r.get('valid_as_of') or '?'}, not {as_of} (in-force fact)"})
                     continue
                 published = as_of.isoformat()

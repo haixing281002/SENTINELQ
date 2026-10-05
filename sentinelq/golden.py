@@ -29,8 +29,12 @@ def load_golden(path: str | Path | None = None) -> list[dict]:
 
 def _item(g: dict) -> LabelledItem:
     lab = g.get("label") or {}
+    from .tiers import tier_of
+    from .cluster import confidence
+    tier = tier_of(g["source_domain"])
     it = RawItem(g["symbol"], "news", g["headline"], g.get("snippet", ""), f"https://{g['source_domain']}/golden/{g['id']}", g["published_date"],
-                 g["source_domain"], purpose="governance", pass_="governance")
+                 g["source_domain"], purpose="governance", pass_="governance", n_sources=int(g.get("n_sources", 1)), max_tier=tier,
+                 confidence=confidence(int(g.get("n_sources", 1)), tier))    # one link is the norm on Google News: a penalty must survive it
     label = Label(lab.get("event_type", g.get("expected_flag_type") or "other"), -1, "golden item", True, None, False, True,
                   subject=lab.get("subject"), occurred_at_company=lab.get("occurred_at_company"), action_stage=lab.get("action_stage"),
                   severity=lab.get("severity"), amount_inr_cr=lab.get("amount_inr_cr"), people_direction=lab.get("people_direction"),

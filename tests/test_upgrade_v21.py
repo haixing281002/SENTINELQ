@@ -314,14 +314,81 @@ def test_golden_recall_checks_the_corpus_when_it_covers_the_stock(tmp_path):
     assert next(x for x in rep["results"] if x["id"] == "G36")["ok"]
 
 
-def test_low_confidence_single_t3_governance_event_is_listed_not_penalised(tmp_path):
+def test_single_lower_tier_source_is_penalised_and_confidence_is_printed(tmp_path):
+    """Google News collapses syndication, so one link per event is normal: a gate-verified event keeps its penalty; confidence is printed."""
     items = [art("X", f"X Corp update {k}: volumes yoy", AS_OF - timedelta(days=k), k) for k in range(0, 365, 15)]
     items.append(art("X", "X Corp faces regulator probe over disclosures", AS_OF - timedelta(days=5), 700, "unknown-blog.in"))
     s = run(tmp_path, items, [Holding("X", "X Corp", "Autos")])["scores"][0]
-    assert s.governance_score == 100 and any("confidence" in p["why"] for p in s.governance_ignored)
-    items[-1] = art("X", "X Corp faces regulator probe over disclosures", AS_OF - timedelta(days=5), 700, "reuters.com")
-    s = run(tmp_path, items, [Holding("X", "X Corp", "Autos")], name="o2")["scores"][0]
-    assert s.governance_score == 80                                  # the keyword stub reads 'regulator' as regulatory_action (-20)
+    assert s.governance_score == 80 and "verify against the filing" in s.governance_penalties[0]["basis"]
+    assert s.governance_penalties[0]["confidence"] < cfg.CONF_UNPENALISED_BELOW
+
+
+def test_orderly_succession_with_named_successor_is_not_an_exit():
+    from sentinelq.models import Label, LabelledItem
+    from sentinelq.score import gate
+    mk = lambda t: LabelledItem(RawItem("N", "news", t, "", "https://reuters.com/x", "2025-12-10", "reuters.com"),
+                                Label("management_exit", -1, "CFO change", True, subject="company", occurred_at_company=True,
+                                      people_direction="unplanned_exit", role_tier="cxo_cs_cfo_compliance"))
+    assert gate(mk("Nestle India CFO Svetlana Boldina to step down, successor to be named"), R)[0] is None
+    assert gate(mk("Cummins India MD to step down; Shveta Arya to take over"), R)[0] is None
+    assert gate(mk("Nestle India CFO resigns with immediate effect"), R)[0] == -8
+    assert gate(mk("Zen Technologies CFO resigns amid audit queries"), R)[0] == -8
+
+
+def test_signal_event_aggregation_reaches_plus_two_and_offset_caps_it():
+    from sentinelq.models import Label, LabelledItem
+    from sentinelq.score import sentiment_terms
+    mk = lambda i, et, sent: LabelledItem(RawItem("B", "news", f"h{i}", "", f"https://reuters.com/{i}", (AS_OF - timedelta(days=i)).isoformat(), "reuters.com",
+                                                   confidence=0.5, pass_="results" if et.startswith("earn") else "sentiment"), Label(et, sent, "", False))
+    items = [mk(i, "earnings_beat", 2) for i in range(4)] + [mk(10 + i, "analyst_action", 0) for i in range(30)]
+    terms, mean, rule = sentiment_terms(items, AS_OF, R)
+    assert mean == 2.0 and rule.startswith("signal-event mean over 4")                 # thirty neutral notes no longer dilute four beats
+    assert sum(1 for t in terms if not t[2]) == 30
+    items.append(mk(50, "earnings_miss", -1))
+    terms, mean, rule = sentiment_terms(items, AS_OF, R)
+    assert mean == 1.49 and "+2 withheld" in rule                                      # the rubric's own anchor: +2 needs no material offset
+    few = [mk(0, "earnings_beat", 2)] + [mk(10 + i, "analyst_action", 0) for i in range(5)]
+    assert sentiment_terms(few, AS_OF, R)[2].startswith("all-event")                   # below min_signal_events: fall back
+
+
+def test_standing_verified_convention_applies_at_any_as_of(tmp_path):
+    from sentinelq.verified import load_verified
+    csv = tmp_path / "v.csv"
+    csv.write_text("symbol,date,headline,event_type,sentiment,subject,severity,action_stage,people_direction,role_tier,amount_inr_cr,event_key,penalty_override,status,valid_as_of,source_ref,url,note,standing\n"
+                   "BOSCHLTD,,MNC structural discount,mnc_structural_discount,0,company,procedural,n/a,n/a,n/a,,bosch-mnc,-5,convention,2026-07-03,recon,,,\n"
+                   "NAM-INDIA,,CBI probe open,investigation,-1,company,material,investigation,n/a,n/a,,nippon-cbi,-10,verified,2026-07-03,BW,,,\n")
+    vit, skipped = load_verified(csv, date(2026, 10, 5), 365, {"BOSCHLTD", "NAM-INDIA"})
+    assert [v.item.symbol for v in vit] == ["BOSCHLTD"] and skipped[0]["symbol"] == "NAM-INDIA"
+    real, _ = load_verified(ROOT / "portfolio" / "verified_events.csv", date(2026, 10, 5), 365, {"BOSCHLTD"})
+    assert any("mnc" in (v.label.event_key or "") for v in real)
+
+
+def test_corpus_union_restores_a_governance_event_missed_by_a_later_run(tmp_path):
+    base = bajaj_auto_year()
+    run(tmp_path, base, H, corpus=tmp_path / "corpus", name="first")                       # the ransomware probe is on record
+    without = [i for i in base if "ransomware" not in i.title]
+    res = run(tmp_path, without, H, corpus=tmp_path / "corpus", name="second")                # this run's feed lost it
+    s = res["scores"][0]
+    assert res["run"]["corpus_union"]["events"] >= 1 and s.governance_score == 90
+    inv = next(p for p in s.governance_penalties if p["event_type"] == "investigation")
+    assert any(li.item.origin.startswith("corpus:") for li in res["kept"]["BAJAJ-AUTO"] if li.label.event_type == "investigation")
+    res2 = run(tmp_path, without, H, corpus=tmp_path / "corpus", name="third", corpus_union=False)
+    assert res2["scores"][0].governance_score == 100
+
+
+def test_results_quota_keeps_one_print_plus_other_results_type_events_per_quarter(tmp_path):
+    base = [art("B", f"Bajaj Auto update {k}: volumes yoy", AS_OF - timedelta(days=k), k) for k in range(0, 365, 9)]
+    q = AS_OF - timedelta(days=20)
+    extra = [art("B", f"Bajaj Auto Q1 results: profit rises {i}", q - timedelta(days=8 * i), 600 + i) for i in range(3)]          # three prints, same quarter, > 2 days apart
+    extra += [art("B", f"Bajaj Auto guidance raised on exports {i}", q - timedelta(days=30 + 6 * i), 700 + i) for i in range(5)]   # five other results-type items
+    p = Pipeline(R, Fixed(base), None, None, KeywordClassifier(), tmp_path / "o", None, AS_OF, governance_pass=False, fundamentals_pass=True,
+                 stratified=True, corpus_dir=None, disk_cache=False)
+    p.news.fetch_fundamentals = lambda h, s, e: extra                                   # the results pass is a separate search
+    res = p.run([Holding("B", "Bajaj Auto", "Autos")])
+    reasons = [d.reason for d in res["dropped"] if d.reason.startswith("results_quota")]
+    assert reasons.count("results_quota_one_print_per_quarter") >= 1 and reasons.count("results_quota_other_per_quarter") >= 1
+    kept_res = [li for li in res["kept"]["B"] if li.item.pass_ == "results"]
+    assert 1 <= sum(1 for li in kept_res if "results" in li.item.title) <= 1 and sum(1 for li in kept_res if "guidance" in li.item.title) <= cfg.RESULTS_OTHER_PER_QUARTER
 
 
 def test_cli_dispatches_the_new_commands(tmp_path, capsys):

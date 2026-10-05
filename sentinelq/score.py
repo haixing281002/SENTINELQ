@@ -34,17 +34,41 @@ def feeds_sentiment(li: LabelledItem) -> bool:
     return li.item.kind == "news" and li.item.purpose == "sentiment" and li.label.event_type != "price_move"
 
 
+def sentiment_terms(items: list[LabelledItem], as_of: date, r: Rubric) -> tuple[list[tuple[LabelledItem, float, bool, str]], float | None, str]:
+    """Every sentiment-feeding event with its weight, whether it enters the mean, and why; plus the mean and the rule applied.
+    Aggregation (rubric `sentiment.aggregation`):
+      all_events    - sum(w*s)/sum(w) over every event (the v2.1 A4 formula as written)
+      signal_events - the same over events whose label is not 0: a 0 means 'no signal', and a mean diluted by dozens of neutral
+                      broker notes cannot reach the rubric's +2 / -1 anchors. Needs >= min_signal_events, else falls back to all_events.
+                      The rubric's own anchor text is applied as a rule: +2 only with no material results-type offset in the window."""
+    c = r["sentiment"]
+    agg = c.get("aggregation", "all_events")
+    rows = [(li, event_weight(li, as_of, r), li.label.sentiment) for li in items if feeds_sentiment(li)]
+    if not rows:
+        return [], None, "no events"
+    signal = [(li, w, s) for li, w, s in rows if s != 0]
+    use_signal = agg == "signal_events" and len(signal) >= c.get("min_signal_events", 3)
+    terms, num, den = [], 0.0, 0.0
+    for li, w, s in rows:
+        inc = (s != 0) if use_signal else True
+        terms.append((li, w, inc, "" if inc else "label 0 = no signal; counted for coverage, not in the mean"))
+        if inc:
+            num += w * s
+            den += w
+    mean = num / den if den else None
+    rule = f"{'signal' if use_signal else 'all'}-event mean over {sum(1 for t in terms if t[2])} event(s)"
+    if mean is not None and use_signal and c.get("plus_two_requires_no_results_offset", True) and mean >= 1.5:
+        offsets = [li for li, w, s in signal if s <= -1 and (li.label.event_type in c["results_event_types"] or li.item.pass_ == "results")]
+        if offsets:
+            mean = 1.49
+            rule += f"; +2 withheld: material results-type offset ('{offsets[0].item.title[:60]}')"
+    return terms, mean, rule
+
+
 def weighted_sentiment(items: list[LabelledItem], as_of: date, r: Rubric) -> float | None:
-    """Confidence-weighted, recency-weighted mean of ordinal sentiments over sentiment-pass and results-pass events (A4):
-    sum(w_recency * conf * s) / sum(w_recency * conf). Price-only items never feed sentiment (Reconciliation fix 5)."""
-    num = den = 0.0
-    for li in items:
-        if not feeds_sentiment(li):
-            continue
-        w = event_weight(li, as_of, r)
-        num += w * li.label.sentiment
-        den += w
-    return num / den if den else None
+    """Confidence-weighted, recency-weighted mean of ordinal sentiments over sentiment-pass and results-pass events (A4).
+    Price-only items never feed sentiment (Reconciliation fix 5). See sentiment_terms for the aggregation rule."""
+    return sentiment_terms(items, as_of, r)[1]
 
 
 def evidence_standard(items: list[LabelledItem], as_of: date, r: Rubric) -> dict:
@@ -115,6 +139,11 @@ _C_SUITE = re.compile(r"\b(ceo|cfo|cto|coo|cio|cmo|cpo|md|chief [a-z&/ ,-]{2,40}
                       r"company secretary|compliance officer)\b", re.I)
 
 
+_ORDERLY = re.compile(r"((to|will|set to) (step down|retire|exit|leave|move on|hand over)|succession|transition|succeeded by|successor|to take over|"
+                      r"takes? over as|named (as )?(new|next)|to be replaced|replaced by|appointed (as )?(new|next|his|her))", re.I)
+_ABRUPT = re.compile(r"abrupt|immediate effect|with immediate|sudden|terminat|sacked|removed|ousted|dismiss|fired|quits|resigns? (amid|after|over|following)", re.I)
+
+
 def literal_rule_override(li: LabelledItem) -> str | None:
     """Text-level safety net behind the model for people items: a 'management_exit' is only a penalty if it really is an UNPLANNED exit of
     a CXO / CS / CFO / compliance officer. Returns the reason NOT to penalise, else None."""
@@ -127,6 +156,8 @@ def literal_rule_override(li: LabelledItem) -> str | None:
         return "elevation / appointment / planned change, not an exit"
     if re.search(r"superannuat|retire|completion of (his|her|the) (term|tenure)", text, re.I) and not re.search(r"resign|terminat|abrupt|sudden", title, re.I):
         return "planned retirement / superannuation, not an unplanned exit"
+    if _ORDERLY.search(text) and not _ABRUPT.search(title):
+        return "orderly succession with a named successor / future effective date, not an unplanned exit (Reconciliation: '3M MD succession' class) - verify against the filing"
     if not _C_SUITE.search(text):
         return "below CXO / CS / CFO / compliance tier"
     return None
@@ -191,10 +222,6 @@ def gate(li: LabelledItem, r: Rubric) -> tuple[float | None, str, str]:
         return float(it.penalty_override), f"human-set weight ({it.verified or 'verified'}; {it.source_ref or 'see evidence'})", "override"
     if base is None:
         return None, g.get("routine_types", {}).get(lab.event_type, "no penalty for this type"), "routine"
-    from .config import CONF_UNPENALISED_BELOW
-    if it.confidence is not None and it.confidence < CONF_UNPENALISED_BELOW and it.max_tier not in ("T1", "T2"):
-        return None, (f"confidence {it.confidence:.2f} < {CONF_UNPENALISED_BELOW} with no T1/T2 source ({it.n_sources} source(s), best tier "
-                      f"{it.max_tier or 'T3'}) - listed, not penalised"), "confidence"
     text = f"{it.title}. {lab.rationale}"
     # 1. subject: the company must be the subject (not victim / lender / peer / sector / macro / shareholders)
     if lab.subject and lab.subject not in c["subject_ok"]:
@@ -237,6 +264,10 @@ def gate(li: LabelledItem, r: Rubric) -> tuple[float | None, str, str]:
         if lab.severity not in exempt and lab.amount_inr_cr is not None and lab.amount_inr_cr < c["materiality_floor_cr"]:
             p = max(p, c["procedural_band_penalty"])
             basis += f"; Rs {lab.amount_inr_cr:g} cr is under the Rs {c['materiality_floor_cr']:g} cr floor -> procedural band {c['procedural_band_penalty']:+g}"
+    # 6. source confidence is PRINTED, never used to mute a verified event: Google News collapses syndication, so one link is normal
+    from .config import CONF_UNPENALISED_BELOW
+    if it.confidence is not None and it.confidence < CONF_UNPENALISED_BELOW and it.max_tier not in ("T1", "T2"):
+        basis += f"; single lower-tier source (conf {it.confidence:.2f}, {it.max_tier or 'T3'}) - verify against the filing"
     return p, basis, "penalty"
 
 

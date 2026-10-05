@@ -26,6 +26,8 @@ from .ingest.select import count_usable, month_spark, name_tokens, select_articl
 from .sampler import stratified_sample
 from .cluster import alias_tokens, attach_extras, build_event, post_label_merge, precluster, top_frequency, url_hash
 from .config import RESULTS_EVENTS_MAX
+import re as _re
+_PRINT = _re.compile(r"result|net profit|\bpat\b|profit (rises|jumps|falls|drops|surges|declines|up|down)|revenue|earnings|\bq[1-4]\b|quarter", _re.I)
 from .pdf import build_pdf
 from .report import write_reports
 from .rubric import Rubric
@@ -108,7 +110,7 @@ class Pipeline:
                  disk_cache: bool = True, governance_pass: bool = True, governance_cap: int = 30,
                  fundamentals_pass: bool = True, fundamentals_cap: int = 40, retrieval_mode: str = "live", run_date: date | None = None,
                  verified_events: str | Path | None = None, universe_hash: str = "", stratified: bool = True,
-                 corpus_dir: str | Path | None = None, news_choice: str = "", golden_file: str | Path | None = None):
+                 corpus_dir: str | Path | None = None, news_choice: str = "", golden_file: str | Path | None = None, corpus_union: bool = True):
         self.r, self.news, self.actions, self.prices, self.clf = rubric, news, actions, prices, classifier
         self.out = Path(out_dir)
         self.cache = LabelCache(cache_path if disk_cache else None)   # label cache holds hash -> label only, no article text
@@ -128,7 +130,7 @@ class Pipeline:
             self.news.on_event = lambda m: self.ui.note("  " + m, "y")
         self._key = lambda i: item_key(i.url, i.title, i.snippet, self.clf.model_id, PROMPT_VERSION)
         # ---- Upgrade v2.1: stratified sampler + event clustering (A1/A3) and the corpus of record (B1-B3)
-        self.stratified, self.news_choice, self.golden_file = stratified, news_choice, golden_file
+        self.stratified, self.news_choice, self.golden_file, self.corpus_union = stratified, news_choice, golden_file, corpus_union
         self.started = datetime.now()
         self._sample_reports: dict[str, dict] = {}
         self._extras: dict[str, list] = {}
@@ -235,17 +237,23 @@ class Pipeline:
             dropped.append(Dropped(h.symbol, x.title, x.url, x.published, "sample", "per_day_cap_no_same_day_cluster"))
         # results anchors: at most RESULTS_EVENTS_MAX results events, one per quarter (the best-sourced one)
         res = [e for e in events if e.pass_ == "results"]
-        if len(res) > 0:
+        if len(res) > 0:                       # one results PRINT per quarter + up to N other results-type events per quarter, newest 4 quarters
+            from .config import RESULTS_OTHER_PER_QUARTER
             byq: dict[str, list] = {}
             for e in res:
                 d = e.event_date or e.published
                 byq.setdefault(f"{d[:4]}Q{(int(d[5:7]) - 1) // 3 + 1}", []).append(e)
             keep = []
             for q in sorted(byq, reverse=True)[:RESULTS_EVENTS_MAX]:
-                keep.append(max(byq[q], key=lambda e: (e.n_sources, e.published)))
+                prints = [e for e in byq[q] if _PRINT.search(e.title or "")]
+                others = [e for e in byq[q] if e not in prints]
+                if prints:
+                    keep.append(max(prints, key=lambda e: (e.n_sources, e.published)))
+                keep += sorted(others, key=lambda e: (e.n_sources, e.published), reverse=True)[:RESULTS_OTHER_PER_QUARTER]
             for e in res:
                 if e not in keep:
-                    dropped.append(Dropped(h.symbol, e.title, e.url, e.published, "sample", "results_quota_one_event_per_quarter"))
+                    dropped.append(Dropped(h.symbol, e.title, e.url, e.published, "sample",
+                                           "results_quota_one_print_per_quarter" if _PRINT.search(e.title or "") else "results_quota_other_per_quarter"))
             events = [e for e in events if e.pass_ != "results" or e in keep]
         n_in = len(news) + len(extras)
         self.ui.note(f"        events: {n_in} article(s) -> {len(events)} event(s) ({sum(1 for e in events if e.n_members > 1)} multi-source); "
@@ -351,6 +359,40 @@ class Pipeline:
                     if on_ready:
                         on_ready(h, self._prep(h, raw[h.symbol]))
         return raw, errors
+
+    def _union_corpus_governance(self, holdings, kept) -> dict:
+        """Governance-flagged events stored by earlier runs and visible at this as-of (B3) join this run's evidence when this run did not
+        retrieve them (same prompt + model only; sentiment is left to this run's stratified sample). Retrieval variance between runs is
+        the single biggest cause of governance scores moving; the corpus of record is the cure the Reconciliation asked for."""
+        from .replay import _visible, event_row_to_item
+        try:
+            rows, runs, _mode = _visible(self.corpus, self.as_of, strict=False)
+        except Exception:
+            return {"events": 0, "runs": []}
+        syms = {h.symbol for h in holdings}
+        have: dict[str, set] = {s: set() for s in syms}
+        for s_, v in kept.items():
+            for li in v:
+                have.setdefault(s_, set()).update([url_hash(li.item.url)] + list(li.item.member_url_hashes))
+        lo = (self.as_of - timedelta(days=self.r["windows"]["news_days"])).isoformat()
+        added, used = 0, set()
+        for e in rows:
+            if e.get("symbol") not in syms or not e.get("is_governance_flag") or e.get("pass") == "verified":
+                continue
+            if e.get("prompt_version") != PROMPT_VERSION or e.get("model_label") != self.clf.model_id:
+                continue
+            if (e.get("event_date") or "")[:10] < lo:
+                continue
+            hashes = set(json.loads(e["member_url_hashes"]) if isinstance(e.get("member_url_hashes"), str) else (e.get("member_url_hashes") or [])) | {e.get("url_hash")}
+            if hashes & have[e["symbol"]]:
+                continue
+            li = event_row_to_item(e)
+            li.item.origin, li.item.purpose, li.item.pass_ = f"corpus:{e.get('run_id', '')}", "governance", "governance"
+            kept[e["symbol"]].append(li)
+            have[e["symbol"]] |= hashes
+            added += 1
+            used.add(e.get("run_id", ""))
+        return {"events": added, "runs": sorted(used)}
 
     def _delta(self, scores) -> list[dict]:
         """B6 Delta: this run vs the previous stored scores/ table (the last non-replay run), never re-derived from news."""
@@ -615,6 +657,12 @@ class Pipeline:
             verified_info["skipped"] = vskip
             ui.note(f"  human-verified evidence merged: {len(vit)} event(s) applied, {len(vskip)} not applicable at this as-of date "
                     f"({sum(1 for v in vit if v.item.verified == 'provisional')} provisional) - re-scored once under the one rubric", "d")
+        union_info = {"events": 0, "runs": []}
+        if self.corpus is not None and self.corpus_union:          # Reconciliation fix 7 across runs: governance events already on record
+            union_info = self._union_corpus_governance(holdings, kept)
+            if union_info["events"]:
+                ui.note(f"  corpus union: {union_info['events']} governance event(s) from earlier run(s) {', '.join(union_info['runs'])} "
+                        "added to this run's evidence (same prompt + model; disclosed as origin corpus:<run_id>)", "d")
         failed = [d for d in dropped if d.reason.startswith("label_failed")]
         labelable = sum(1 for v in raw.values() for i in v if i.url.strip()) or 1
         if failed:
@@ -671,7 +719,7 @@ class Pipeline:
                                                               "NOT a point-in-time backtest (search rankings decay; older articles drop out of feeds).",
                                       "dated_archive": "Retrieved from a dated archive (GDELT history) for the as-of window.",
                                       "supplied": "News supplied from a file.", "live": "Live run: as-of date is current."}.get(self.retrieval_mode, "")},
-               "universe_hash": self.universe_hash, "verified": verified_info, "title": self.meta["title"], "coverage": self.meta["coverage"],
+               "universe_hash": self.universe_hash, "verified": verified_info, "corpus_union": union_info, "title": self.meta["title"], "coverage": self.meta["coverage"],
                "totals": {"label_failed": len(failed), "retrieved": sum(len(v) for v in raw.values()),
                           "kept": sum(len(v) for v in kept.values()), "dropped": len(dropped)}}
         result = dict(run=run, scores=scores, kept=kept, dropped=dropped, coverage=coverage,

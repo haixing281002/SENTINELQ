@@ -16,7 +16,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 from . import __version__
-from .score import recency_weight
+from .score import recency_weight, sentiment_terms
 
 
 def _git_commit() -> str:
@@ -38,20 +38,20 @@ def score_workings(result: dict, rubric) -> list[dict]:
     rows = []
     for s in result["scores"]:
         items = result["kept"].get(s.symbol, [])
+        terms, mean, rule = sentiment_terms(items, as_of, rubric)
         num = den = 0.0
-        for li in sorted(items, key=lambda x: x.item.published, reverse=True):
-            if li.item.kind != "news" or li.item.purpose != "sentiment":
-                continue
-            w = recency_weight(li.item.published, as_of, rubric)
+        for li, w, inc, why in sorted(terms, key=lambda t: t[0].item.published, reverse=True):
             age = (as_of - date.fromisoformat(li.item.published)).days
-            num += w * li.label.sentiment
-            den += w
+            if inc:
+                num += w * li.label.sentiment
+                den += w
             rows.append({"symbol": s.symbol, "component": "sentiment", "date": li.item.published, "headline": li.item.title,
                          "url": li.item.url, "event_type": li.label.event_type, "label_value": li.label.sentiment,
-                         "age_days": age, "weight": round(w, 6), "contribution": round(w * li.label.sentiment, 6), "note": ""})
+                         "age_days": age, "weight": round(w, 6) if inc else 0, "contribution": round(w * li.label.sentiment, 6) if inc else 0,
+                         "note": why or f"recency x confidence {li.item.confidence if li.item.confidence is not None else 1.0}"})
         rows.append({"symbol": s.symbol, "component": "sentiment-total", "date": "", "headline": f"sum(w*s)={num:.6f} / sum(w)={den:.6f}",
                      "url": "", "event_type": "", "label_value": "", "age_days": "", "weight": round(den, 6),
-                     "contribution": round(num / den, 6) if den else "", "note": f"= {s.company_sentiment_raw}; shown as integer {s.company_sentiment}"})
+                     "contribution": round(num / den, 6) if den else "", "note": f"{rule}; = {s.company_sentiment_raw}; shown as integer {s.company_sentiment}"})
         run_total = float(rubric["governance"]["start"])
         for p in s.governance_penalties:
             run_total += p["penalty"]
@@ -98,6 +98,12 @@ def write_audit(out: Path, result: dict, rubric, params: dict, queries: list[dic
     md += [f"| {k} | {v} |" for k, v in params.items()]
     retr = run.get("retrieval", {})
     md += ["", f"- **Retrieval: {retr.get('mode', '?')}** - {retr.get('note', '')}", f"- Universe hash `{run.get('universe_hash', '')[:12]}` (diffed against the last confirmed run before this run started)"]
+    vsk = (run.get("verified") or {}).get("skipped") or []
+    if vsk:
+        md += ["- **Human-verified evidence NOT applied at this as-of** (re-verify for the new date):"] + [f"  - {x['symbol']}: {x['headline']} - {x['why']}" for x in vsk]
+    cu = run.get("corpus_union") or {}
+    if cu.get("events"):
+        md += [f"- **Corpus union:** {cu['events']} governance event(s) from earlier run(s) {', '.join(cu['runs'])} added (origin `corpus:<run_id>` in evidence.json)"]
     if run.get("stamp"):
         g = run.get("golden") or {}
         md += [f"- **Stamp (v2.1 B6):** {run['stamp']}", f"- Run id `{run.get('run_id', '')}` · sampler {run.get('sampler', '')} · items sent to the model {run.get('n_llm_items', '?')} · "

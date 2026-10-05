@@ -1,5 +1,5 @@
 {
-  "version": "1.4.0",
+  "version": "1.5.0",
   "_note": "Single source of truth for every weight, penalty and taxonomy entry. Scores change only if this file changes. Values marked 'assumed' were not stated in the architecture document and should be confirmed by the committee.",
   "event_types": [
     "earnings_beat",
@@ -59,7 +59,11 @@
       "operating_update"
     ],
     "min_span_days": 270,
-    "insufficient_note": "Below the minimum evidence standard sentiment reports Insufficient Data rather than a forced +1 or 0 (Reconciliation fix 6)."
+    "insufficient_note": "Below the minimum evidence standard sentiment reports Insufficient Data rather than a forced +1 or 0 (Reconciliation fix 6).",
+    "aggregation": "signal_events",
+    "min_signal_events": 3,
+    "plus_two_requires_no_results_offset": true,
+    "aggregation_note": "A 0 label means no signal; the mean is taken over non-zero events (confidence x recency weighted) so the rubric's +2 / -1 anchors are reachable. Falls back to the all-event mean below min_signal_events. +2 only with no material results-type offset in the window."
   },
   "governance": {
     "start": 100,
