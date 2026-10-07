@@ -1,5 +1,5 @@
 {
-  "version": "1.6.0",
+  "version": "1.9.0",
   "_note": "Single source of truth for every weight, penalty and taxonomy entry. Scores change only if this file changes. Values marked 'assumed' were not stated in the architecture document and should be confirmed by the committee.",
   "event_types": [
     "earnings_beat",
@@ -48,7 +48,7 @@
     "prices_days": 183
   },
   "sentiment": {
-    "half_life_trading_days": 126,
+    "half_life_trading_days": 90,
     "trading_days_per_year": 252,
     "min_relevant_articles": 8,
     "require_results_print": true,
@@ -60,14 +60,19 @@
     ],
     "min_span_days": 270,
     "insufficient_note": "Below the minimum evidence standard sentiment reports Insufficient Data rather than a forced +1 or 0 (Reconciliation fix 6).",
-    "aggregation": "signal_events",
+    "aggregation": "all_events",
     "min_signal_events": 3,
     "plus_two_requires_no_results_offset": false,
     "aggregation_note": "Anchored at 0: a 0 label is no signal and neither adds nor subtracts. Every non-zero event pulls in its direction with recency x confidence weight; the score is the net of all positives against all negatives (falls back to the all-event mean below min_signal_events). The two veto rules (plus_two_requires_no_results_offset, minus_one_when_results_negative) are OFF: the IC can switch them on if it decides results prints should override the net weighing.",
     "minus_one_when_results_negative": false,
     "results_dominance_threshold": -0.5,
-    "recency_floor": 0.25,
-    "recency_note": "Weight = max(recency_floor, 0.5 ^ (age_trading_days / half_life_trading_days)). Half-life 126 trading days (half a year) with a 0.25 floor, so the whole 12-month lookback counts: a January item carries ~0.3 of a September item's weight, not ~0.05 as under the 60-day half-life, which made sentiment effectively a one-quarter score."
+    "recency_floor": 0.15,
+    "points_scale": 50,
+    "bands": {"plus2": 50, "plus1": 15},
+    "window_weights": [[30, 1.0], [90, 0.75], [180, 0.5], [365, 0.25]],
+    "use_source_confidence": false,
+    "simple_note": "v1.9.0 (simple and checkable by hand): stock sentiment = weighted average of the -2..+2 scores of EVERY article about the company (0s included), weight by window only - W1 0-30d 1.0, W2 31-90d 0.75, W3 91-180d 0.5, W4 181-365d 0.25; no source-confidence factor. Shown as points = average x 50 (-100..+100). Bands: >= +50 -> +2, +15..+49 -> +1, -14..+14 -> 0, -15..-49 -> -1, <= -50 -> -2. Not counted: passing mentions, share-price-only items, governance-search articles (they feed governance). window_weights replaces the half-life curve when present.",
+        "recency_note": "Weight = max(recency_floor, 0.5 ^ (age_trading_days / half_life_trading_days)). v1.7.0: half-life 90 trading days with a 0.15 floor (was 126 / 0.25, which left the last month with only ~24% of the weight). Weights by age: now 1.00, 1m 0.85, 3m 0.62, 6m 0.38, 9m 0.24, 12m 0.15 - the whole year still counts, but recent news leads. This is on top of the sampler's recency-tilted article budget."
   },
   "governance": {
     "start": 100,
@@ -105,6 +110,12 @@
       }
     ],
     "historical_penalty": -5,
+    "age_taper": {
+      "full_days": 182,
+      "end_days": 365,
+      "end_factor": 0.5,
+      "_note": "v1.7.0: a penalised event keeps its full penalty for 6 months, then tapers linearly to half by 12 months (penalty x factor, rounded to a whole point). Human-set weights on verified evidence are not tapered. Set end_factor 1.0 to switch off."
+    },
     "notes": {
       "auditor_restatement": [
         "Auditor resignation or restatement",

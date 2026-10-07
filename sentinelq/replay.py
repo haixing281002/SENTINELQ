@@ -35,7 +35,7 @@ def event_row_to_item(e: dict) -> LabelledItem:
                 bool(e.get("historical")), True, subject=gate.get("subject"), occurred_at_company=gate.get("occurred_at_company"),
                 action_stage=gate.get("action_stage"), severity=gate.get("severity"), amount_inr_cr=gate.get("amount_inr_cr"),
                 people_direction=gate.get("people_direction"), role_tier=gate.get("role_tier"), event_key=gate.get("event_key"),
-                substance=gate.get("substance") or "primary")
+                substance=gate.get("substance") or "primary", gist=gate.get("gist") or "")
     return LabelledItem(it, lab, from_cache=True)
 
 

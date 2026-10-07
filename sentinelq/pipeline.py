@@ -89,6 +89,18 @@ THROTTLE_HELP = (
 )
 
 
+def _has_gist(row: dict) -> bool:
+    """Prompt v2 labels always carry a gist. The tag 'v2' was also used by an earlier (substance) prompt whose labels are in the
+    corpus and the label cache; those have no gist and must be re-labelled, never reused as current."""
+    gate = row.get("gate_json")
+    gate = json.loads(gate) if isinstance(gate, str) and gate else (gate or {})
+    return bool(gate.get("gist"))
+
+
+def _cache_ok(hit) -> bool:
+    return bool(hit) and (not isinstance(hit.get("label"), dict) or "gist" in hit["label"] or hit["label"].get("about_company") is False)
+
+
 def _label_from_event_row(row: dict) -> dict:
     gate = row.get("gate_json")
     gate = json.loads(gate) if isinstance(gate, str) and gate else (gate or {})
@@ -151,7 +163,7 @@ class Pipeline:
             from .corpus import Corpus
             self.corpus = Corpus(corpus_dir)
             try:
-                self._corpus_idx = self.corpus.label_index(PROMPT_VERSION, self.clf.model_id)
+                self._corpus_idx = {h: e for h, e in self.corpus.label_index(PROMPT_VERSION, self.clf.model_id).items() if _has_gist(e)}
             except Exception as e:               # a damaged table must not stop a run; it is reported
                 self.ui.note(f"  corpus label index unavailable ({e!r}); labels will be fetched again", "y")
 
@@ -253,14 +265,16 @@ class Pipeline:
         alias = alias_tokens(h.name, h.aliases, h.symbol)
         common = top_frequency([i.title for i in news] + [x.title for x in extras], alias)
         events, dropped = [], []
+        # No per-day cap on scoring: the day's overflow joins the same content clustering as everything else. A repeat of a story
+        # (same content in other words / other outlets) becomes an extra source of that event; anything new is its own scored event.
+        seen = {id(i) for i in news}
+        news = news + [x for x in extras if id(x) not in seen]
         for members in precluster(news, alias, common):
             passes = {m.pass_ for m in members}
             pass_ = "sentiment" if "sentiment" in passes else "results" if "results" in passes else "governance"
             ev = build_event(members, pass_)
             ev.purpose = "sentiment" if pass_ in ("sentiment", "results") else "governance"
             events.append(ev)
-        for x in attach_extras(events, extras, alias):
-            dropped.append(Dropped(h.symbol, x.title, x.url, x.published, "sample", "per_day_cap_no_same_day_cluster"))
         # results anchors: at most RESULTS_EVENTS_MAX results events, one per quarter (the best-sourced one)
         res = [e for e in events if e.pass_ == "results"]
         if len(res) > 0:                       # one results PRINT per quarter + up to N other results-type events per quarter, newest 4 quarters
@@ -284,15 +298,15 @@ class Pipeline:
         n_in = len(news) + len(extras)
         self.ui.note(f"        events: {n_in} article(s) -> {len(events)} event(s) ({sum(1 for e in events if e.n_members > 1)} multi-source); "
                      f"only representatives are labelled", "d")
-        if self.fetch_text_events and not self.fetch_text:          # opt-in: read the body of results / governance representatives (in memory)
+        if self.fetch_text_events and not self.fetch_text:          # read the body of every labelled event (in memory), so labels rest on the article
             try:
                 from .ingest.fulltext import enrich
-                reps = [e for e in events if e.pass_ in ("results", "governance") or e.origin == "filings"]
+                reps = [e for e in events if e.kind == "news"]
                 if reps:
-                    enrich(reps, None, progress=self.ui.fulltext, budget=20.0)
+                    enrich(reps, None, progress=self.ui.fulltext, budget=45.0)
                     self.ui.clear_status()
                     got = sum(1 for e in reps if e.parse.startswith("full-text"))
-                    self.ui.note(f"        full text read for {got}/{len(reps)} results / governance / filing event(s) (headline-only for the rest)", "d")
+                    self.ui.note(f"        article text read for {got}/{len(reps)} event(s) (headline-only for the rest: paywalled / blocked / slow)", "d")
             except Exception as e:                                    # never let a body fetch stop a run
                 self.ui.note(f"        full text skipped ({e!r})", "y")
         return events + rest, dropped
@@ -418,7 +432,7 @@ class Pipeline:
         for e in rows:
             if e.get("symbol") not in syms or not e.get("is_governance_flag") or e.get("pass") == "verified":
                 continue
-            if e.get("prompt_version") != PROMPT_VERSION or e.get("model_label") != self.clf.model_id:
+            if e.get("prompt_version") != PROMPT_VERSION or e.get("model_label") != self.clf.model_id or not _has_gist(e):
                 continue
             if (e.get("event_date") or "")[:10] < lo:
                 continue
@@ -521,7 +535,7 @@ class Pipeline:
                     continue
                 it, lab = li.item, li.label
                 gate = {k: getattr(lab, k) for k in ("subject", "occurred_at_company", "action_stage", "severity", "amount_inr_cr",
-                                                    "people_direction", "role_tier", "event_key", "substance")}
+                                                    "people_direction", "role_tier", "event_key", "substance", "gist")}
                 events.append({"event_id": it.event_id or url_hash(it.url), "symbol": it.symbol, "event_date": it.event_date or it.published,
                                "pass": it.pass_ or ("verified" if it.verified else "sentiment"), "n_sources": it.n_sources, "n_members": it.n_members,
                                "max_tier": it.max_tier or tier_of(domain_of(it.url, it.source)), "representative_url": it.url,
@@ -580,7 +594,7 @@ class Pipeline:
             return None, "", False
         key = self._key(item)
         hit = None if bypass_cache else self.cache.get(key)
-        if hit:
+        if _cache_ok(hit):
             return hit["label"], hit["raw"], True
         if not bypass_cache and self._corpus_idx:               # B2: same url_hash + prompt + model -> the stored label, no model call
             row = self._corpus_idx.get(url_hash(item.url)) or next((self._corpus_idx[hh] for hh in item.member_url_hashes if hh in self._corpus_idx), None)
@@ -630,7 +644,7 @@ class Pipeline:
             items, cdrops = self._to_events(h, items)
             dropped += cdrops
         need = [(i, h.name) for i in items if i.prelabel is None and i.url.strip()]
-        todo = [(i, c) for i, c in need if not self.cache.get(self._key(i)) and not (self._corpus_idx and (
+        todo = [(i, c) for i, c in need if not _cache_ok(self.cache.get(self._key(i))) and not (self._corpus_idx and (
             url_hash(i.url) in self._corpus_idx or any(hh in self._corpus_idx for hh in i.member_url_hashes)))]
         self.llm_items += len(todo)
         ui.label_start(len(todo), len(need) - len(todo), Counter(i.symbol for i, _ in todo), h.symbol)
@@ -793,7 +807,6 @@ class Pipeline:
         result = dict(run=run, scores=scores, kept=kept, dropped=dropped, coverage=coverage,
                       price_context=ctx, relative=rel, ingest_errors=ingest_errors, raw_log=raw_log, delta=self._delta(scores))
         ui.stage("Report", "workbook, commentary per stock, portfolio observations, PDF")
-        write_reports(self.out, result, self.r)
         narr, done_n, lint = {}, 0, []
         from .lint import strip_price_sentences
         with ThreadPoolExecutor(2) as ex:
@@ -810,11 +823,13 @@ class Pipeline:
         obs = self.narrator.portfolio(portfolio_facts(scores, kept))
         obs.append(self._split_observation(scores, result.get("delta") or []))      # deterministic; never written by the model
         result.update(narrative=narr, observations=obs, lint=lint)
+        write_reports(self.out, result, self.r)                          # after the commentary: the scorecard carries its one-line read
         if lint:
             ui.note(f"  price-language lint: removed {len(lint)} sentence(s) from sentiment commentary (share-price moves never feed sentiment)", "y")
         (self.out / "narrative.json").write_text(json.dumps({"holdings": narr, "observations": obs}, indent=2), encoding="utf-8")
         (self.out / "lint.json").write_text(json.dumps(lint, indent=2), encoding="utf-8")
-        build_pdf(self.out / "sentinelq_scorecard.pdf", result, self.r, narr, obs, self.meta)
+        from .report import save_or_sidestep
+        save_or_sidestep(lambda f: build_pdf(f, result, self.r, narr, obs, self.meta), self.out / "sentinelq_scorecard.pdf")
         from .audit import write_audit
         write_audit(self.out, result, self.r, self._params(), list(getattr(self.news, "audit", [])))
         ui.note("[STEP 6/6 REPORT] audit record written: " + str(self.out / "audit" / "RUN_RECORD.md"), "g")

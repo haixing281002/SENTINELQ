@@ -7,17 +7,21 @@ from .pipeline import Pipeline, load_portfolio
 from .rubric import load_rubric
 
 
+DEFAULT_PORTFOLIO = Path(__file__).resolve().parent.parent / "portfolio" / "stocks_given.tsv"   # the 29 holdings
+
+
 def main(argv=None):
     import sys
     args = sys.argv[1:] if argv is None else list(argv)
     if args and args[0] == "run":                 # `python -m sentinelq run ...` (Upgrade v2.1 B4) is the normal weekly run
         args = args[1:]
         argv = args
-    if args and args[0] in ("inspect", "verify", "render", "merge", "learn", "replay", "relabel", "backtest", "diff", "golden"):      # manual-verification tools (see tools.py)
+    if args and args[0] in ("inspect", "verify", "render", "excel", "merge", "learn", "replay", "relabel", "backtest", "diff", "golden"):      # manual-verification tools (see tools.py)
         from .tools import main as tools_main
         raise SystemExit(tools_main(args))
     p = argparse.ArgumentParser(prog="sentinelq", description="Sentinel Q pipeline")
-    p.add_argument("--portfolio", help="CSV with symbol,name,sector[,cap,weight]")
+    p.add_argument("--portfolio", help="CSV with symbol,name,sector[,cap,weight] "
+                   f"(default: the built-in 29 holdings, {DEFAULT_PORTFOLIO.name})")
     p.add_argument("--pick", help="comma-separated names/tickers to look up in --universe")
     p.add_argument("--universe", default="portfolio/universe.csv")
     p.add_argument("--out", default=None, help="output dir (default runs/<as_of>)")
@@ -61,7 +65,8 @@ def main(argv=None):
     p.add_argument("--no-prefilter", action="store_true", help="send generic market-roundup headlines to the model too")
     p.add_argument("--no-disk-cache", action="store_true", help="keep even the label/prose caches in memory only (nothing cached on disk)")
     p.add_argument("--fetch-text", action="store_true", help="read the body text of EVERY article (slow)")
-    p.add_argument("--fetch-text-events", action="store_true", help="read the body text of results / governance / filing events only (opt-in)")
+    p.add_argument("--fetch-text-events", action="store_true", help=argparse.SUPPRESS)          # kept for old commands: body reading is now the default
+    p.add_argument("--headline-only", action="store_true", help="do not read article bodies (default: the body of every labelled event is read, in memory)")
     p.add_argument("--filings", choices=["bse", "none"], default="none", help="free BSE announcements as a second source (opt-in: --filings bse)")
     p.add_argument("--work", default="work", help="dir for hand-off files (file mode)")
     p.add_argument("--corpus-dir", default="audit", help="corpus of record (append-only tables: articles, events, verifications, scores, manifest)")
@@ -141,8 +146,8 @@ def main(argv=None):
     if a.pick:
         from .pipeline import pick_holdings
         holdings = pick_holdings(a.universe, [x.strip() for x in a.pick.split(",") if x.strip()])
-    elif a.portfolio:
-        holdings = load_portfolio(a.portfolio)
+    elif a.portfolio or DEFAULT_PORTFOLIO.exists():
+        holdings = load_portfolio(a.portfolio or DEFAULT_PORTFOLIO)
     else:
         p.error("give --portfolio or --pick")
     from .resolve import enrich
@@ -161,7 +166,7 @@ def main(argv=None):
                     news_choice=a.news, golden_file=a.golden_file, corpus_union=not a.no_corpus_union, budget=a.budget,
                     window_quotas=[int(x) for x in a.window_quotas.split(",")] if a.window_quotas else None,
                     filings=(__import__("sentinelq.ingest.filings", fromlist=["BseAnnouncements"]).BseAnnouncements() if a.filings == "bse" and a.news != "file" else None),
-                    fetch_text_events=a.fetch_text_events)
+                    fetch_text_events=not a.headline_only and a.news != "file")
     ingested = None
     if a.classifier == "file":
         ingested = pipe.ingest(holdings)

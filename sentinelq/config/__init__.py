@@ -5,9 +5,9 @@ from pathlib import Path
 
 # A1 - stratified sampler: (days_from, days_to, article quota), back from as_of. W1 can never fill the whole budget.
 SAMPLE_WINDOWS = [(0, 30, 40), (31, 90, 25), (91, 180, 20), (181, 365, 15)]   # 100 (the v2.1 document); --budget 150 for the larger sample
-PER_DAY_CAP = 6                 # articles per stock per calendar day counted against the quota; the rest become extra sources
+PER_DAY_CAP = 6                 # articles per stock per day counted against the window quota; the overflow is still clustered and scored (no day cap on scoring)
 RESULTS_EVENTS_MAX = 4          # at most four results PRINTS (one per quarter) ...
-RESULTS_OTHER_PER_QUARTER = 3   # ... plus up to three other results-type events per quarter (guidance, order wins, margin notes)
+RESULTS_OTHER_PER_QUARTER = 99  # ... other results-type events per quarter: no cap (distinct stories are all scored; repeats cluster)
 GOV_PASS_MAX = 30               # (v2.1 document) ...
 GOV_PASS_WINDOWS = [9, 8, 7, 6] # ... filled per window W1..W4 (newest first inside each), shortfalls carried to the next older window
                                 # then back to the newest, so a burst of recent appointment headlines cannot push an older order out

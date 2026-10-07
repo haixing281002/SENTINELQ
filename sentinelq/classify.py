@@ -12,8 +12,8 @@ from typing import Protocol
 from .models import Label, RawItem
 from .rubric import Rubric
 
-PROMPT_VERSION = "v1"            # cache key: v1 labels stay valid - `substance` was added as an optional field (absent = primary)
-PROMPT_REVISION = "v1.1-substance"  # recorded in the manifest; a change that invalidates old labels must bump PROMPT_VERSION itself
+PROMPT_VERSION = "v2"            # cache key. v2: gist + scale-anchored sentiment + a rationale that justifies the level (v1 labels are re-labelled)
+PROMPT_REVISION = "v2.0-gist-scale"  # v1.2: rationale must explain the score, not restate the headline (new labels only; cached v1 labels keep their old text); recorded in the manifest; a change that invalidates old labels must bump PROMPT_VERSION itself
 
 SYSTEM = (
     "You are a labelling function for an equity research pipeline. You are given ONE news item "
@@ -21,7 +21,23 @@ SYSTEM = (
     "Do not use outside knowledge, do not speculate, do not infer events that are not stated. "
     "Choose the single best event_type from the enumerated list (use 'other' if none fits). "
     "sentiment is an integer from -2 (very negative for the company) to +2 (very positive). "
-    "rationale is ONE sentence grounded in the supplied text. "
+    "The text field holds the article body when it could be read (else '(headline only)'): READ IT, it usually carries the figures. "
+    "gist is 1-2 sentences of what the article actually reports - who did what, with the key numbers (growth %, Rs crore, target price, "
+    "order size, penalty amount) - written so an analyst can validate the label without opening the link. "
+    "SENTIMENT SCALE (use the full range; do not default to +1): "
+    "+2 = clearly material and company-specific good news backed by a hard fact: profit/revenue growth >= ~20% or a clear beat, guidance raised, "
+    "an order / contract / capacity addition that is large for the company (>~5% of revenue or stated as its largest), a rating upgrade, "
+    "a broker upgrade or a target raise of >= ~15%, a regulator's clean chit on a material matter, Navratna-type status. "
+    "+1 = positive but modest or routine: single-digit growth, an in-line quarter, a small order, a reiterated Buy, an ordinary dividend, "
+    "a new product/plant without numbers that look material. "
+    "0 = no signal for the company's value: a passing mention, a list, a price-only item, a routine filing, a neutral broker view. "
+    "-1 = mildly negative: a soft quarter, a small miss, a broker downgrade to neutral, a modest fine or demand, an unplanned non-CXO exit. "
+    "-2 = clearly material bad news: profit fall >= ~20% or a big miss, guidance cut, a regulator's order or settlement, a fraud / probe on the "
+    "company, an auditor exit, a CXO resignation, a large tax demand or penalty relative to the company, a rating downgrade, losing a major contract. "
+    "rationale is ONE or TWO sentences that say WHY this level and not the one next to it, citing the deciding fact from the text "
+    "(e.g. 'Net profit +32% YoY with margins up 180 bp - a clear, material beat, so +2 rather than +1.' / "
+    "'Order of Rs 120 crore is under 2% of revenue - positive but small, so +1.' / 'Only lists the stock among peers - no company event, so 0.'). "
+    "Never restate or paraphrase the headline as the rationale. "
     "governance_flag is true only if the item concerns regulation, investigations, auditors, "
     "promoter pledges, related-party transactions, litigation, or senior management changes. "
     "materiality (low/medium/high) is the economic size of a corporate action or fine, else omit. "
@@ -56,7 +72,7 @@ SYSTEM = (
     "board_independence = combined chair/MD roles or independent-director gaps; board_change_routine = ordinary board changes. "
     "auditor_resignation / auditor_restatement = adverse; auditor_rotation = scheduled rotation or routine reappointment. "
     "regulatory_action = a SEBI / exchange / RBI order, penalty or settlement. "
-    "Calibration: SEBI/regulator order or settlement -> regulatory_action, -2, governance. CXO/CFO resignation -> management_exit, -1, "
+    "Calibration: SEBI/regulator order or settlement -> regulatory_action, -2, governance. CXO/CFO resignation -> management_exit, -2 (-1 if planned / orderly), "
     "governance. Record quarterly profit / revenue growth -> earnings_beat, +2. Profit collapse -> earnings_miss, -2. Routine broker "
     "target reiteration -> analyst_action, +1 or 0. Dividend declared -> dividend, +1. "
     "You must answer by calling the label_item tool."
@@ -72,6 +88,7 @@ def tool_schema(r: Rubric) -> dict:
             "properties": {
                 "event_type": {"type": "string", "enum": [e for e in r.event_types if e not in r.data.get("reserved_event_types", [])]},
                 "sentiment": {"type": "integer", "minimum": r.sent_min, "maximum": r.sent_max},
+                "gist": {"type": "string"},
                 "rationale": {"type": "string"},
                 "governance_flag": {"type": "boolean"},
                 "materiality": {"type": "string", "enum": r["materiality_levels"]},
@@ -88,7 +105,7 @@ def tool_schema(r: Rubric) -> dict:
                 "role_tier": {"type": "string", "enum": ["cxo_cs_cfo_compliance", "senior_management", "below_cxo", "non_executive_director", "n/a"]},
                 "event_key": {"type": "string"},
             },
-            "required": ["event_type", "sentiment", "rationale", "governance_flag", "about_company"],
+            "required": ["event_type", "sentiment", "gist", "rationale", "governance_flag", "about_company"],
             "additionalProperties": False,
         },
     }
@@ -109,7 +126,7 @@ def batch_schema(r: Rubric) -> dict:
     event type is always from the fixed taxonomy and sentiment is always an integer in range (the doc's 'forced structure')."""
     props = dict(tool_schema(r)["input_schema"]["properties"])
     item = {"type": "object", "properties": {"id": {"type": "string"}, **props},
-            "required": ["id", "event_type", "sentiment", "rationale", "governance_flag", "about_company"],
+            "required": ["id", "event_type", "sentiment", "gist", "rationale", "governance_flag", "about_company"],
             "additionalProperties": False}
     return {"type": "object", "properties": {"labels": {"type": "array", "items": item}}, "required": ["labels"], "additionalProperties": False}
 
@@ -207,7 +224,7 @@ class KeywordClassifier:
                 if et == "analyst_action":
                     s = -1 if "downgrade" in text else 1 if "upgrade" in text else 0
                 lab = {"event_type": et, "sentiment": s,
-                       "rationale": f"Keyword match on '{pat.split('|')[0]}' in headline.",
+                       "gist": item.title, "rationale": f"Keyword match on '{pat.split('|')[0]}' in headline.",
                        "governance_flag": g, "about_company": True, "substance": "primary"}
                 if g:      # offline stand-in for the verification gate: assume the company is the subject and the matter is material
                     lab.update(subject="company", occurred_at_company=True, severity="integrity" if et in ("regulatory_action", "auditor_resignation", "auditor_restatement") else "material")
@@ -216,7 +233,7 @@ class KeywordClassifier:
                                    role_tier="cxo_cs_cfo_compliance" if et == "management_exit" else "senior_management")
                     lab["action_stage"] = {"regulatory_action": "order_or_settlement", "investigation": "investigation"}.get(et, "routine" if et == "management_change_routine" else "n/a")
                 return lab, json.dumps(lab)
-        lab = {"event_type": "other", "sentiment": 0, "rationale": "No taxonomy match in text.",
+        lab = {"event_type": "other", "sentiment": 0, "gist": item.title, "rationale": "No taxonomy match in text.",
                "governance_flag": False, "about_company": True, "substance": "primary"}
         return lab, json.dumps(lab)
 
@@ -227,4 +244,4 @@ def to_label(d: dict) -> Label:
                  relevant=bool(d.get("about_company", True)),
                  subject=d.get("subject"), occurred_at_company=d.get("occurred_at_company"), action_stage=d.get("action_stage"),
                  severity=d.get("severity"), amount_inr_cr=d.get("amount_inr_cr"), people_direction=d.get("people_direction"),
-                 role_tier=d.get("role_tier"), event_key=d.get("event_key"), substance=d.get("substance") or "primary")
+                 role_tier=d.get("role_tier"), event_key=d.get("event_key"), substance=d.get("substance") or "primary", gist=d.get("gist") or "")

@@ -118,7 +118,7 @@ def _row_to_item(r: dict) -> LabelledItem:
     lab = Label(r["event_type"], r["sentiment"], r.get("rationale", ""), bool(r["governance_flag"]), r.get("materiality"), bool(r.get("historical")),
                 subject=r.get("subject"), occurred_at_company=r.get("occurred_at_company"), action_stage=r.get("action_stage"),
                 severity=r.get("severity"), amount_inr_cr=r.get("amount_inr_cr"), people_direction=r.get("people_direction"),
-                role_tier=r.get("role_tier"), event_key=r.get("event_key"), substance=r.get("substance") or "primary")
+                role_tier=r.get("role_tier"), event_key=r.get("event_key"), substance=r.get("substance") or "primary", gist=r.get("gist") or "")
     return LabelledItem(it, lab)
 
 
@@ -216,6 +216,58 @@ def merge(a) -> int:
         "- Rule: union of evidence, scored once. Scores are never averaged and no side is picked.\n\n" + "\n".join(rows) + "\n", encoding="utf-8")
     print(f"merged {len(merged)} stocks -> {out}/ (MERGE_RECORD.md, scores.json, sentinelq_scorecard.pdf)")
     print("\n".join(rows))
+    return 0
+
+
+def excel(a) -> int:
+    """Rebuild sentinelq_report.xlsx from a finished run's saved files (no news fetch, no model call). Scores are read, not recomputed."""
+    from collections import defaultdict
+    from .models import Dropped
+    from .report import write_reports
+    run = Path(a.run_dir)
+    ev, saved, meta = _load_run(run)
+    rubric = Rubric(meta["rubric"], meta["rubric_sha256"])
+    kept = defaultdict(list)
+    for r in ev:
+        li = _row_to_item(r)
+        for k in ("confidence", "window", "n_sources", "max_tier", "event_id", "parse", "members", "event_date"):
+            if r.get(k) is not None:
+                setattr(li.item, k, r[k])
+        li.item.pass_ = r.get("pass") or ""
+        kept[r["symbol"]].append(li)
+    rd = lambda n: [json.loads(x) for x in (run / n).read_text(encoding="utf-8").splitlines() if x.strip()] if (run / n).exists() else []
+    scores = [StockScore(**s_) for s_ in saved]
+    if getattr(a, "rescore", False):              # Stage 5 again under the CURRENT rubric: pure arithmetic on the saved labels
+        from datetime import date as _d
+        from .models import Holding
+        from .rubric import load_rubric
+        from .score import score_portfolio
+        rubric = load_rubric()
+        as_of = _d.fromisoformat(str(meta["as_of"])[:10])
+        dropped_n = {}
+        for d in rd("dropped.jsonl"):
+            dropped_n[d["symbol"]] = dropped_n.get(d["symbol"], 0) + 1
+        hold = [Holding(s_.symbol, s_.name, s_.sector, cap=s_.cap, weight=s_.weight) for s_ in scores]
+        scores = score_portfolio(hold, kept, dropped_n, as_of, rubric)
+        meta = dict(meta, rubric=rubric.data, rubric_sha256=rubric.sha256, rubric_version=rubric.version,
+                    rescored=f"scores recomputed offline under rubric {rubric.version} from the saved labels")
+        (run / "scores.json").write_text(json.dumps([x.to_dict() for x in scores], indent=2), encoding="utf-8")
+        (run / "run_meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+        print(f"[STEP 5/6 SCORE] rescored {len(scores)} stock(s) under rubric {rubric.version}")
+    res = {"scores": scores, "kept": kept,
+           "run": {k: v for k, v in meta.items() if k not in ("rubric", "coverage", "ingest_errors")},
+           "coverage": meta.get("coverage", []), "ingest_errors": meta.get("ingest_errors", []),
+           "dropped": [Dropped(**d) for d in rd("dropped.jsonl")], "raw_log": rd("raw_model_responses.jsonl"),
+           "price_context": None, "relative": None}
+    if (run / "narrative.json").exists():
+        res["narrative"] = json.loads((run / "narrative.json").read_text(encoding="utf-8")).get("holdings", {})
+    tmp = run / "_xlsx_rebuild"
+    write_reports(tmp, res, rubric)
+    (tmp / "sentinelq_report.xlsx").replace(run / "sentinelq_report.xlsx")
+    for f in tmp.iterdir():
+        f.unlink()
+    tmp.rmdir()
+    print(f"[STEP 6/6 REPORT] rebuilt {run / 'sentinelq_report.xlsx'} from the saved run files (Price Context / Delta sheets are only written by a live run)")
     return 0
 
 
@@ -348,6 +400,9 @@ def main(argv: list[str]) -> int:
     mg.add_argument("--title")
     v = sub.add_parser("verify")
     v.add_argument("run_dir")
+    xl = sub.add_parser("excel")
+    xl.add_argument("run_dir")
+    xl.add_argument("--rescore", action="store_true", help="recompute scores under the current rubric first (no fetch, no model)")
     r = sub.add_parser("render")
     r.add_argument("run_dir")
     r.add_argument("--title")
@@ -360,4 +415,4 @@ def main(argv: list[str]) -> int:
         return corpus_cmd(a)
     if a.cmd == "inspect":
         return {"input": inspect_input, "news": inspect_news, "label": inspect_label, "filings": inspect_filings}[a.what](a)
-    return {"verify": verify, "render": render, "merge": merge}[a.cmd](a)
+    return {"verify": verify, "render": render, "merge": merge, "excel": excel}[a.cmd](a)

@@ -70,6 +70,7 @@ class Label:
     role_tier: str | None = None            # cxo_cs_cfo_compliance | senior_management | below_cxo | non_executive_director | n/a
     event_key: str | None = None            # short id of the underlying real-world event, for same-event de-duplication
     substance: str = "primary"              # primary | passing (the company is a mention, not the subject) | boilerplate (templated, no event)
+    gist: str = ""                          # 1-2 sentences: what the article reports, with its numbers (read from the body when available)
 
 
 @dataclass
@@ -94,7 +95,7 @@ class LabelledItem:
                      role_tier=self.label.role_tier, event_key=self.label.event_key, substance=self.label.substance, source_ref=self.item.source_ref,
                      verified=self.item.verified, penalty_override=self.item.penalty_override)
             d.update(event_type=self.label.event_type, sentiment=self.label.sentiment,
-                     rationale=self.label.rationale,
+                     gist=self.label.gist, rationale=self.label.rationale,
                      governance_flag=self.label.governance_flag,
                      materiality=self.label.materiality, historical=self.label.historical)
         return d
@@ -127,6 +128,7 @@ class StockScore:
     n_dropped: int = 0
     low_confidence: bool = False
     rationale: str = ""
+    workings: str = ""                      # the arithmetic behind the scores (formula text); `rationale` is the plain-English why
     cap: str = ""
     weight: str = ""
     sentiment_note: str = ""                       # why sentiment is n/a (Insufficient Data) when it is
@@ -143,6 +145,7 @@ class StockScore:
     tier12_share: float | None = None
     conf_weighted_n: float | None = None
     window_dominated: bool = False          # acceptance A5.1: one window holds > 70% of the events
+    sentiment_points: int | None = None     # the same net as whole points on -100..+100 (net x 50); the -2..+2 score is its band
 
     def to_dict(self):
         return asdict(self)

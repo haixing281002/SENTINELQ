@@ -11,6 +11,7 @@ from sentinelq import replay as RP
 from sentinelq.classify import KeywordClassifier
 from sentinelq.corpus import Corpus
 from sentinelq.golden import run_golden
+from sentinelq.models import Label, LabelledItem, RawItem
 from sentinelq.models import Holding, RawItem
 from sentinelq.pipeline import Pipeline
 from sentinelq.rubric import load_rubric
@@ -277,9 +278,11 @@ def test_b6_workbook_and_pdf_carry_the_stamps(tmp_path):
     run(tmp_path, bajaj_auto_year(), H, corpus=tmp_path / "corpus")
     wb = openpyxl.load_workbook(tmp_path / "o" / "sentinelq_report.xlsx")
     heads = [c.value for c in wb["Scorecard"][1]]
-    assert "Events" in heads and any(h.startswith("Coverage map") for h in heads)
+    assert "Articles scored" in heads and "Sentiment - why" in heads and "Main positives" in heads and wb.sheetnames[0] == "Read me"
+    assert "Coverage map" in [c.value for c in wb["Coverage"][1]]                     # the coverage map moved off the scorecard
     assert "Verification record" in [c.value for c in wb["Evidence - Governance"][1]]
-    assert "Confidence" in [c.value for c in wb["Evidence - Sentiment"][1]]
+    art = [c.value for c in wb["Articles by window"][1]]
+    assert "Window weight (%)" in art and "What the article says" in art and "Why this score" in art
     text = " ".join(pg.get_text() for pg in pymupdf.open(tmp_path / "o" / "sentinelq_scorecard.pdf"))
     assert "Run stamp" in text and "rubric v" in text and "W1:" in text
     run(tmp_path, bajaj_auto_year(), H, corpus=tmp_path / "corpus", name="o2")
@@ -340,7 +343,7 @@ def test_orderly_succession_with_named_successor_is_not_an_exit():
 def test_signal_event_aggregation_reaches_plus_two_and_offset_caps_it():
     from sentinelq.models import Label, LabelledItem
     from sentinelq.score import sentiment_terms
-    R = load_rubric(overrides={"sentiment": {"plus_two_requires_no_results_offset": True}})     # the veto is off by default; test it switched on
+    R = load_rubric(overrides={"sentiment": {"plus_two_requires_no_results_offset": True, "aggregation": "signal_events"}})     # veto + signal mode switched on
     mk = lambda i, et, sent: LabelledItem(RawItem("B", "news", f"h{i}", "", f"https://reuters.com/{i}", (AS_OF - timedelta(days=i)).isoformat(), "reuters.com",
                                                    confidence=0.5, pass_="results" if et.startswith("earn") else "sentiment"), Label(et, sent, "", False))
     items = [mk(i, "earnings_beat", 2) for i in range(4)] + [mk(10 + i, "analyst_action", 0) for i in range(30)]
@@ -349,9 +352,9 @@ def test_signal_event_aggregation_reaches_plus_two_and_offset_caps_it():
     assert sum(1 for t in terms if not t[2]) == 30
     items.append(mk(300, "earnings_miss", -1))                                        # an old miss: small weight, still a material offset
     terms, mean, rule = sentiment_terms(items, AS_OF, R)
-    assert mean == 1.49 and "+2 withheld" in rule                                      # with the veto on: +2 needs no material offset
-    terms, mean, rule = sentiment_terms(items, AS_OF, load_rubric())
-    assert mean > 1.4 and "withheld" not in rule                                       # default: pure net weighing, no veto
+    assert mean == 49 / 50 and "+2 withheld" in rule                                   # veto on: held just under the +2 band (+49 pts)
+    terms, mean, rule = sentiment_terms(items, AS_OF, load_rubric(overrides={"sentiment": {"aggregation": "signal_events"}}))
+    assert mean > 1.4 and "withheld" not in rule                                       # veto off: pure net weighing
     few = [mk(0, "earnings_beat", 2)] + [mk(10 + i, "analyst_action", 0) for i in range(5)]
     assert sentiment_terms(few, AS_OF, R)[2].startswith("all-event")                   # below min_signal_events: fall back
 
@@ -393,9 +396,10 @@ def test_results_quota_keeps_one_print_plus_other_results_type_events_per_quarte
     p.news.fetch_fundamentals = lambda h, s, e: extra                                   # the results pass is a separate search
     res = p.run([Holding("B", "Bajaj Auto", "Autos")])
     reasons = [d.reason for d in res["dropped"] if d.reason.startswith("results_quota")]
-    assert reasons.count("results_quota_one_print_per_quarter") >= 1 and reasons.count("results_quota_other_per_quarter") >= 1
+    assert reasons.count("results_quota_one_print_per_quarter") >= 1 and reasons.count("results_quota_other_per_quarter") == 0   # no cap on distinct stories
     kept_res = [li for li in res["kept"]["B"] if li.item.pass_ == "results"]
-    assert 1 <= sum(1 for li in kept_res if "results" in li.item.title) <= 1 and sum(1 for li in kept_res if "guidance" in li.item.title) <= cfg.RESULTS_OTHER_PER_QUARTER
+    assert sum(1 for li in kept_res if "results" in li.item.title) == 1                              # the same quarter's print is scored once
+    assert sum(1 for li in kept_res if li.item.title in others) == len(others)                      # every distinct results-type story is scored
 
 
 def test_cli_dispatches_the_new_commands(tmp_path, capsys):
@@ -517,14 +521,12 @@ def test_tier_corrections_and_new_boilerplate_patterns():
     assert is_boilerplate("Dixon Technologies Records Rs 195 Crore Block Trade on NSE") and not is_boilerplate("Godrej Industries Q1 net profit falls 19%")
 
 
-def test_recency_floor_keeps_the_whole_year_in_play():
+def test_recency_is_a_flat_weight_per_window():
     from sentinelq.score import recency_weight
-    w_recent = recency_weight((AS_OF - timedelta(days=10)).isoformat(), AS_OF, R)
-    w_jan = recency_weight((AS_OF - timedelta(days=270)).isoformat(), AS_OF, R)
-    w_old = recency_weight((AS_OF - timedelta(days=360)).isoformat(), AS_OF, R)
-    assert w_recent > 0.9 and 0.25 <= w_old <= w_jan < w_recent and w_jan / w_recent > 0.3
-    r60 = load_rubric(overrides={"sentiment": {"half_life_trading_days": 60, "recency_floor": 0.0}})
-    assert recency_weight((AS_OF - timedelta(days=270)).isoformat(), AS_OF, r60) < 0.15          # the old one-quarter behaviour
+    w = lambda days: recency_weight((AS_OF - timedelta(days=days)).isoformat(), AS_OF, R)
+    assert [w(0), w(30), w(31), w(90), w(91), w(180), w(181), w(365)] == [1.0, 1.0, 0.75, 0.75, 0.5, 0.5, 0.25, 0.25]   # v1.9: W1..W4
+    r60 = load_rubric(overrides={"sentiment": {"window_weights": None, "half_life_trading_days": 60, "recency_floor": 0.0}})
+    assert recency_weight((AS_OF - timedelta(days=270)).isoformat(), AS_OF, r60) < 0.15          # the old curve is still available
 
 
 def test_bse_filings_provider_parses_announcements_and_rejects_a_wrong_scrip(tmp_path):
@@ -568,3 +570,39 @@ def test_filings_join_the_run_as_results_and_governance_anchors(tmp_path):
     s = res["scores"][0]
     assert any(li.item.origin == "filings" for li in res["kept"]["BAJAJ-AUTO"]) and "filings 1" in s.coverage_map
     assert any(p_["event_type"] == "management_exit" for p_ in s.governance_penalties)
+
+
+def test_governance_penalty_fades_after_six_months_and_the_newest_of_a_type_counts():
+    from sentinelq.score import governance
+    def gli(days, et="regulatory_action"):
+        it = RawItem("X", "news", f"SEBI order against X Corp {days}", "", f"https://e.com/{days}", (AS_OF - timedelta(days=days)).isoformat(), "",
+                     purpose="governance")
+        return LabelledItem(it, Label(et, -2, "r", True, None, False, True, subject="company", occurred_at_company=True,
+                                      action_stage="order_or_settlement", severity="material", event_key=f"k{days}"))
+    assert governance([gli(30)], R, "X Corp", AS_OF)[0] == 80                  # inside 6 months: full -20
+    s, _, pens = governance([gli(300)], R, "X Corp", AS_OF)
+    assert -20 < pens[0]["penalty"] < -10 and pens[0]["full_penalty"] == -20 and s == 100 + pens[0]["penalty"]
+    assert governance([gli(364)], R, "X Corp", AS_OF)[0] == 90                 # ~12 months: half
+    assert governance([gli(300)], R, "X Corp")[0] == 80                        # no as_of: no taper (golden set, legacy callers)
+
+
+def test_score_rationale_explains_drivers_not_headlines():
+    from sentinelq.score import explain_sentiment, evidence_standard, sentiment_terms
+    def sli(days, s_, title):
+        it = RawItem("X", "news", title, "", f"https://e.com/{title}", (AS_OF - timedelta(days=days)).isoformat(), "", purpose="sentiment")
+        return LabelledItem(it, Label("earnings_beat" if s_ > 0 else "earnings_miss", s_, "r", False, None, False, True))
+    items = [sli(10, 2, "Q2 profit up 40%"), sli(40, 1, "Order win"), sli(200, -2, "Q4 profit collapses"), sli(20, 0, "Peer list")]
+    ev = {"insufficient": ""}
+    txt = explain_sentiment(items, AS_OF, R, ev)
+    _, mean, _ = sentiment_terms(items, AS_OF, R)
+    from sentinelq.score import to_points, to_band
+    assert f"weighted average article score is {to_points(mean, R):+d} on a -100..+100 scale" in txt and f"Scored {to_band(mean, R):+d}" in txt
+    assert "Pushing up" in txt and "Pulling down" in txt and "Q2 profit up 40%" in txt and "Q4 profit collapses" in txt
+    assert "1 neutral" in txt and "not counted" not in txt                                 # v1.9: neutral articles count
+    assert explain_sentiment(items, AS_OF, R, {"insufficient": "only 2 event(s)"}).startswith("Sentiment not scored")
+
+
+def test_bands_turn_net_points_into_whole_scores():
+    from sentinelq.score import to_band, to_points
+    assert [to_band(x / 50, R) for x in (60, 50, 49, 15, 14, 0, -14, -15, -49, -50, -90)] == [2, 2, 1, 1, 0, 0, 0, -1, -1, -2, -2]
+    assert to_points(1.17, R) == 58 and to_band(None, R) is None

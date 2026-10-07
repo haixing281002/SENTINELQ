@@ -13,6 +13,9 @@ from .rubric import Rubric
 def recency_weight(published: str, as_of: date, r: Rubric) -> float:
     d = parse_date(published)
     age_cal = max((as_of - d).days, 0)
+    ww = r["sentiment"].get("window_weights")
+    if ww:                                                     # v1.9: a flat weight per window (W1..W4), nothing else
+        return next((w for days, w in ww if age_cal <= days), ww[-1][1])
     age_td = age_cal * r["sentiment"]["trading_days_per_year"] / 365.0
     return max(float(r["sentiment"].get("recency_floor", 0.0)), 0.5 ** (age_td / r["sentiment"]["half_life_trading_days"]))
 
@@ -24,9 +27,25 @@ def to_integer(x: float | None) -> int | None:
     return int(math.copysign(math.floor(abs(x) + 0.5), x))
 
 
+def to_points(x: float | None, r: Rubric) -> int | None:
+    """Net evidence as whole points on -100..+100 (rubric sentiment.points_scale; net x 50)."""
+    return None if x is None else int(round(x * r["sentiment"].get("points_scale", 50)))
+
+
+def to_band(x: float | None, r: Rubric) -> int | None:
+    """Displayed score -2..+2 from the net's points and the rubric bands (falls back to rounding without bands)."""
+    b = r["sentiment"].get("bands")
+    if x is None or not b:
+        return to_integer(x)
+    pts = to_points(x, r)
+    sign = 1 if pts >= 0 else -1
+    a = abs(pts)
+    return sign * (2 if a >= b["plus2"] else 1 if a >= b["plus1"] else 0)
+
+
 def event_weight(li: LabelledItem, as_of: date, r: Rubric) -> float:
     """Recency weight x event confidence (A4). An item without event fields (legacy / tests) has confidence 1."""
-    conf = li.item.confidence if li.item.confidence is not None else 1.0
+    conf = li.item.confidence if li.item.confidence is not None and r["sentiment"].get("use_source_confidence", True) else 1.0
     return recency_weight(li.item.published, as_of, r) * conf
 
 
@@ -60,10 +79,11 @@ def sentiment_terms(items: list[LabelledItem], as_of: date, r: Rubric) -> tuple[
     mean = num / den if den else None
     rule = f"{'signal' if use_signal else 'all'}-event mean over {sum(1 for t in terms if t[2])} event(s)"
     is_res = lambda li: li.label.event_type in c["results_event_types"] or li.item.pass_ == "results"
-    if mean is not None and use_signal and c.get("plus_two_requires_no_results_offset", True) and mean >= 1.5:
+    top = (c["bands"]["plus2"] - 1) / c.get("points_scale", 50) if c.get("bands") else 1.49
+    if mean is not None and use_signal and c.get("plus_two_requires_no_results_offset", True) and mean > top:
         offsets = [li for li, w, s in signal if s <= -1 and is_res(li)]
         if offsets:
-            mean = 1.49
+            mean = top
             rule += f"; +2 withheld: material results-type offset ('{offsets[0].item.title[:60]}')"
     if mean is not None and c.get("minus_one_when_results_negative", False):
         res = [(w, s) for li, w, s in signal if is_res(li)]          # the mirror of the +2 rule: results anchor the year both ways
@@ -291,10 +311,24 @@ def gate(li: LabelledItem, r: Rubric) -> tuple[float | None, str, str]:
     return p, basis, "penalty"
 
 
-def governance(items: list[LabelledItem], r: Rubric, company_name: str = "") -> tuple[float, str, list[dict]]:
+def age_factor(published: str, as_of: date | None, r: Rubric) -> float:
+    """Governance age taper (rubric `governance.age_taper`): 1.0 up to full_days old, then linear down to end_factor at end_days."""
+    t = r["governance"].get("age_taper")
+    d = parse_date(published)
+    if not t or as_of is None or d is None:
+        return 1.0
+    age = (as_of - d).days
+    if age <= t["full_days"]:
+        return 1.0
+    frac = min(1.0, (age - t["full_days"]) / max(1, t["end_days"] - t["full_days"]))
+    return 1.0 - frac * (1.0 - t["end_factor"])
+
+
+def governance(items: list[LabelledItem], r: Rubric, company_name: str = "", as_of: date | None = None) -> tuple[float, str, list[dict]]:
     """Start at 100. Every governance-flagged item passes the verification gate; survivors are de-duplicated by real-world event
     (same event_key, or the same event reported within `dedupe_days`), then fixed penalties apply once per type. The -5 memory discount
-    for out-of-window events applies only if NO in-window penalty exists. Items deliberately not penalised are kept, with the reason."""
+    for out-of-window events applies only if NO in-window penalty exists. Items deliberately not penalised are kept, with the reason.
+    With `as_of`, penalties fade with age (age_factor) and, within a type, the event with the largest faded penalty is the one counted."""
     g = r["governance"]
     c = g["conventions"]
     score, applied = float(g["start"]), []
@@ -334,15 +368,23 @@ def governance(items: list[LabelledItem], r: Rubric, company_name: str = "") -> 
             continue
         kept.append((li, p, why))
 
+    def eff(li, p):                                                          # human-set weights are recorded as given, never faded
+        return p if li.item.penalty_override is not None else float(round(p * age_factor(li.item.published, as_of, r)))
+    order = ((lambda x: (x[0].item.penalty_override is None, eff(x[0], x[1]), _neg_date(x[0].item.published))) if as_of is not None
+             else (lambda x: (x[0].item.penalty_override is None, x[0].item.published)))
     seen_types = set()
-    for li, p, why in sorted(kept, key=lambda x: (x[0].item.penalty_override is None, x[0].item.published)):   # human-weighted first
+    for li, p, why in sorted(kept, key=order):                                   # human-weighted first
         et = li.label.event_type
         if g["count_mode"] == "once_per_type" and et in seen_types and li.item.penalty_override is None:
             skip(li, f"a second {et.replace('_', ' ')} - each event type is penalised once")
             continue
         seen_types.add(et)
+        full, p = p, eff(li, p)
+        if p != full:
+            age = (as_of - parse_date(li.item.published)).days
+            why += f"; aged {age} days: {full:+g} faded x{p / full:.2f} to {p:+g}"
         score += p
-        applied.append({"event_type": et, "penalty": p, "date": li.item.published, "headline": li.item.title, "url": li.item.url,
+        applied.append({"event_type": et, "penalty": p, "full_penalty": full, "date": li.item.published, "headline": li.item.title, "url": li.item.url,
                         "source_ref": li.item.source_ref, "verified": li.item.verified, "basis": why, "event_id": li.item.event_id,
                         "verification": {"subject_is_company": li.label.subject in (None, "company", "subsidiary", "promoter_or_insider"),
                                          "event_at_company": li.label.occurred_at_company, "direction": li.label.people_direction,
@@ -361,6 +403,11 @@ def governance(items: list[LabelledItem], r: Rubric, company_name: str = "") -> 
             skip(li, "out-of-window event: memory discount not applied because an in-window penalty exists")
     label = next(x["label"] for x in g["labels"] if score >= x["min"])
     return score, label, applied
+
+
+def _neg_date(s: str) -> int:
+    d = parse_date(s)
+    return -d.toordinal() if d else 0
 
 
 def corporate_actions(items: list[LabelledItem], r: Rubric) -> tuple[float, list[dict]]:
@@ -383,6 +430,117 @@ def corporate_actions(items: list[LabelledItem], r: Rubric) -> tuple[float, list
     return max(lo, min(hi, total)), detail
 
 
+_PLAIN = {"earnings_beat": "results beat", "earnings_miss": "results miss", "guidance_change": "guidance change", "order_win": "order win",
+          "operating_update": "operating update", "analyst_action": "broker view", "capacity_expansion": "capacity expansion",
+          "merger_acquisition": "M&A", "regulatory_action": "regulatory action", "management_exit": "management exit"}
+
+
+def _short(t: str, n: int = 85) -> str:
+    t = " ".join((t or "").split())
+    return t if len(t) <= n else t[:n - 3].rstrip() + "..."
+
+
+def _mon(d: str) -> str:
+    x = parse_date(d)
+    return x.strftime("%d-%b-%y") if x else "?"
+
+
+def explain_sentiment(items: list[LabelledItem], as_of: date, r: Rubric, ev: dict, top: int = 3) -> str:
+    """Plain-English 'why' for the sentiment score, read off the same terms the score is computed from. Whole numbers only:
+    each event's push is its share of the net in points (-100..+100), so the pushes add up (to rounding) to the stock's net points."""
+    if ev.get("insufficient"):
+        return f"Sentiment not scored - {ev['insufficient']}."
+    terms, mean, rule = sentiment_terms(items, as_of, r)
+    inc = [(li, w) for li, w, ok, _ in terms if ok]
+    if mean is None or not inc:
+        return "Sentiment not scored - no qualifying events."
+    den = sum(w for _, w in inc)
+    k = r["sentiment"].get("points_scale", 50)
+    pulls = [(li, w, w * li.label.sentiment / den * k) for li, w in inc]
+    pos = sorted((x for x in pulls if x[2] > 0), key=lambda x: -x[2])
+    neg = sorted((x for x in pulls if x[2] < 0), key=lambda x: x[2])
+    n0 = sum(1 for _, _, ok, _ in terms if not ok)
+    pts, band = to_points(mean, r), to_band(mean, r)
+    b = r["sentiment"].get("bands") or {"plus2": 75, "plus1": 25}
+    rng = {2: f">= +{b['plus2']}", 1: f"+{b['plus1']} to +{b['plus2'] - 1}", 0: f"-{b['plus1'] - 1} to +{b['plus1'] - 1}",
+           -1: f"-{b['plus2'] - 1} to -{b['plus1']}", -2: f"<= -{b['plus2']}"}[band]
+    lab = {2: "+2", 1: "+1", 0: "0", -1: "-1", -2: "-2"}
+
+    def line(li, w, pull):
+        kind = _PLAIN.get(li.label.event_type, li.label.event_type.replace("_", " "))
+        return f"\"{_short(li.item.title)}\" ({_mon(li.item.published)}, {kind} {lab[li.label.sentiment]}, {round(pull):+d} pts)"
+    recent = sum(w for li, w in inc if (as_of - parse_date(li.item.published)).days <= 90) / den
+    strong = sum(1 for li, _ in inc if abs(li.label.sentiment) == 2)
+    nz = sum(1 for li, _ in inc if li.label.sentiment == 0)
+    out = [f"Scored {lab[band]} because the weighted average article score is {pts:+d} on a -100..+100 scale ({lab[band]} band is {rng}): "
+           f"{len(pos)} positive, {nz} neutral and {len(neg)} negative articles ({strong} rated +/-2)"
+           + (f", {n0} not counted" if n0 else "") + f"; the last 3 months carry {recent:.0%} of the weight."]
+    if pos:
+        out.append(f"Pushing up ({round(sum(x[2] for x in pos)):+d} pts): " + "; ".join(line(*x) for x in pos[:top]) + ".")
+    if neg:
+        out.append(f"Pulling down ({round(sum(x[2] for x in neg)):+d} pts): " + "; ".join(line(*x) for x in neg[:top]) + ".")
+    if "withheld" in rule or "capped" in rule:
+        out.append("Rule applied: " + rule.split("; ", 1)[1] + ".")
+    return " ".join(out)
+
+
+def drivers(items: list[LabelledItem], as_of: date, r: Rubric) -> tuple[list, list, dict]:
+    """(positives, negatives, facts) behind the sentiment score: each event with its whole-number push on the -100..+100 net,
+    strongest first. facts: net points, band, counts, recent share. Same arithmetic as explain_sentiment."""
+    terms, mean, _ = sentiment_terms(items, as_of, r)
+    inc = [(li, w) for li, w, ok, _ in terms if ok]
+    if mean is None or not inc:
+        return [], [], {}
+    den = sum(w for _, w in inc)
+    k = r["sentiment"].get("points_scale", 50)
+    pulls = [(li, w * li.label.sentiment / den * k) for li, w in inc]
+    pos = sorted((x for x in pulls if x[1] > 0), key=lambda x: -x[1])
+    neg = sorted((x for x in pulls if x[1] < 0), key=lambda x: x[1])
+    facts = {"points": to_points(mean, r), "band": to_band(mean, r), "n_pos": len(pos), "n_neg": len(neg),
+             "n_zero": sum(1 for _, _, ok, _ in terms if not ok),
+             "recent": sum(w for li, w in inc if (as_of - parse_date(li.item.published)).days <= 90) / den}
+    return pos, neg, facts
+
+
+def driver_line(li: LabelledItem, pts: float) -> str:
+    return f"{li.label.sentiment:+d} | {_mon(li.item.published)} | {_short(li.item.title, 75)} ({round(pts):+d} pts)"
+
+
+def explain_governance(score: float, label: str, pens: list[dict], ignored: list[dict]) -> str:
+    if not pens:
+        txt = f"Governance {score:g} ({label}): no penalised event in the window."
+    else:
+        parts = []
+        for p in sorted(pens, key=lambda x: x["penalty"]):
+            faded = f", faded from {p['full_penalty']:+g} for age" if p.get("full_penalty") not in (None, p["penalty"]) else ""
+            parts.append(f"{p['event_type'].replace('_', ' ')} {p['penalty']:+g} ({_mon(p['date'])}{faded}): \"{_short(p['headline'])}\"")
+        txt = f"Governance {score:g} ({label}) = 100 " + " ".join(f"{p['penalty']:+g}" for p in sorted(pens, key=lambda x: x["penalty"])) + ". " + "; ".join(parts) + "."
+    if ignored:
+        txt += f" {len(ignored)} other flagged item(s) not penalised, e.g. \"{_short(ignored[0]['headline'], 60)}\" - {ignored[0]['why']}."
+    return txt
+
+
+def event_treatment(items: list[LabelledItem], as_of: date, r: Rubric) -> dict[int, dict]:
+    """Per-article record for the Excel: how this one item entered (or did not enter) the stock's sentiment score, in whole numbers.
+    Keyed by id(LabelledItem): {counted, share (% of the stock's weight), points (push on the -100..+100 net), why}."""
+    terms, mean, _ = sentiment_terms(items, as_of, r)
+    den = sum(w for _, w, ok, _ in terms if ok) or 1.0
+    k = r["sentiment"].get("points_scale", 50)
+    out = {}
+    for li, w, ok, why in terms:
+        out[id(li)] = ({"counted": "yes", "share": round(100 * w / den), "wweight": round(100 * w), "points": round(w * li.label.sentiment / den * k),
+                        "why": f"counted: score {li.label.sentiment:+d} x window weight {w:g} ({round(100 * w / den)}% of this stock's weight)"}
+                       if ok else {"counted": "no", "share": 0, "wweight": "", "points": "", "why": "not counted: " + why})
+    for li in items:
+        if id(li) not in out and li.item.kind == "news":
+            why = ("governance article - feeds the governance score, not sentiment" if li.item.purpose != "sentiment"
+                   else "share-price-only item - prices never feed sentiment" if li.label.event_type == "price_move"
+                   else "the company is only mentioned in passing" if getattr(li.label, "substance", "primary") == "passing"
+                   else "excluded")
+            out[id(li)] = {"counted": "no", "share": 0, "wweight": "", "points": "", "why": "not counted: " + why}
+    return out
+
+
 def score_portfolio(holdings: list[Holding], by_symbol: dict[str, list[LabelledItem]],
                     dropped_counts: dict[str, int], as_of: date, r: Rubric) -> list[StockScore]:
     # Sector sentiment: computed once per sector over the pooled (URL-deduped) constituents' news.
@@ -403,7 +561,7 @@ def score_portfolio(holdings: list[Holding], by_symbol: dict[str, list[LabelledI
         ev = evidence_standard(items, as_of, r)
         if ev["insufficient"]:
             cs = None                                                     # Insufficient Data - never a forced +1 / 0
-        g_score, g_label, pens = governance(items, r, h.name + " " + h.aliases.replace("|", " "))
+        g_score, g_label, pens = governance(items, r, h.name + " " + h.aliases.replace("|", " "), as_of)
         g_ignored = list(governance.ignored)
         ca_score, ca_detail = corporate_actions(items, r)
         n_news = sum(1 for i in items if i.item.kind == "news" and i.item.purpose == "sentiment")
@@ -414,16 +572,19 @@ def score_portfolio(holdings: list[Holding], by_symbol: dict[str, list[LabelledI
             note = f"EVIDENCE WINDOW COLLAPSED: articles span only {ev['span']} days ({ev['first']}..{ev['last']}) of the 12-month lookback"
         low = low or bool(ev["insufficient"]) or ev["collapsed"]
         cm = coverage_map(items, ev, as_of, r)
-        rat = (f"Governance = {r['governance']['start']} with penalties [{pen_txt}] = {g_score:g} ({g_label}). "
-               f"Sentiment from {ev['n']} relevant news item(s), half-life {r['sentiment']['half_life_trading_days']} trading days."
+        why = explain_sentiment(items, as_of, r, ev) + " " + explain_governance(g_score, g_label, pens, g_ignored)
+        if ca_detail:
+            why += f" Corporate actions {round(ca_score):+d} (" + ", ".join(sorted({d['event_type'] for d in ca_detail})) + ")."
+        wk = (f"Governance = {r['governance']['start']} with penalties [{pen_txt}] = {g_score:g} ({g_label}). "
+               f"Sentiment from {ev['n']} relevant news item(s), half-life {r['sentiment']['half_life_trading_days']} trading days, floor {r['sentiment'].get('recency_floor', 0)}."
                + (f" {note}." if note else "") + (" LOW CONFIDENCE." if low else ""))
         out.append(StockScore(
-            symbol=h.symbol, name=h.name, sector=h.sector, company_sentiment=to_integer(cs),
+            symbol=h.symbol, name=h.name, sector=h.sector, company_sentiment=to_band(cs, r), sentiment_points=to_points(cs, r),
             company_sentiment_raw=None if cs is None else round(cs, 3),
-            sector_sentiment=None if sector_sent.get(h.sector) is None else round(sector_sent[h.sector], 2),
+            sector_sentiment=to_band(sector_sent.get(h.sector), r),
             governance_score=g_score, governance_label=g_label, governance_penalties=pens, corporate_action_score=round(ca_score, 2),
             corporate_action_detail=ca_detail, n_items=len(items), n_dropped=dropped_counts.get(h.symbol, 0), low_confidence=low,
-            rationale=rat, cap=h.cap, weight=h.weight, sentiment_note=note, relevant_articles=ev["n"], evidence_first=ev["first"],
+            rationale=why + (" LOW CONFIDENCE." if low else ""), workings=wk, cap=h.cap, weight=h.weight, sentiment_note=note, relevant_articles=ev["n"], evidence_first=ev["first"],
             evidence_last=ev["last"], evidence_span_days=ev["span"], governance_ignored=g_ignored,
             coverage_map=cm["text"], n_events=cm["n_events"], n_results_events=cm["n_results"], window_events=cm["windows"],
             tier12_share=cm["tier12_share"], conf_weighted_n=cm["conf_weighted_n"], window_dominated=cm["dominated"]))

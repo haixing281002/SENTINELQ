@@ -37,16 +37,17 @@ TOOL = {
             "sentiment_rationale": {"type": "string", "description": (
                 "Two short paragraphs separated by a blank line. Paragraph 1: the positive case with dated, sourced facts "
                 "and figures (results, guidance, broker views). Paragraph 2: the offsets or the absence of offsets in the "
-                "twelve-month window, ending with a sentence that explains why the fixed sentiment score stands "
-                "(e.g. 'The score therefore stands at +2 - sustained beats with broad confirming evidence and no counterweight.'). "
-                "Use the supplied sentiment score verbatim.")},
+                "twelve-month window, ending with a sentence that explains why the fixed sentiment score stands, citing the supplied net "
+                "points and band (e.g. 'Net evidence is +71 of 100, inside the +2 band (>= +55): sustained beats with no counterweight.'). "
+                "Use the supplied sentiment score and points verbatim; whole numbers only, never decimals. 'why_this_score' lists the "
+                "events that moved the score most - lead with those.")},
             "governance_rationale": {"type": "string", "description": (
                 "One to three short paragraphs. If penalties were applied: say which event and its date, then the arithmetic "
                 "in words using ONLY the supplied penalties ('The scoring applies -20 for the disclosed regulatory action to reach 80, "
                 "then a further -8 for the CPO resignation, arriving at 72 (Flag).'). If none: 'No adverse governance events are present "
                 "in the lookback.' Mention routine or out-of-window items that were deliberately not scored, and any memory-discount. "
                 "Use the supplied governance score and label verbatim.")},
-            "one_line_read": {"type": "string", "description": "2 to 5 words, e.g. 'Confirmed compounder', 'Momentum intact', 'Regulatory scar; strong operations'."},
+            "one_line_read": {"type": "string", "description": "ALWAYS fill this (never empty): 2 to 5 words naming what drives the year, e.g. 'Confirmed compounder', 'Momentum intact', 'Regulatory scar; strong operations'."},
             "key_corporate_action": {"type": "string", "description": "Terse list of the key corporate actions in the evidence, e.g. 'Div Rs 46 final + Rs 20 interim' or 'Rs 5,633cr buyback @ Rs 12,000 (open 1-Jul)'. An em dash if none."},
             "coverage_note": {"type": "string", "description": "Only if coverage is thin or sources conflict AND the sentiment rationale does not already say so; otherwise return an empty string. Never repeat what the rationale states."},
         },
@@ -73,7 +74,9 @@ def evidence_payload(s: StockScore, items: list[LabelledItem]) -> dict:
         "company": s.name, "sector": s.sector,
         "sentiment_status": s.sentiment_note or "ok", "evidence_span": f"{s.evidence_first}..{s.evidence_last}" if s.evidence_first else "none",
         "coverage_map": s.coverage_map,
-        "scores": {"sentiment": s.company_sentiment if s.company_sentiment is not None else "INSUFFICIENT DATA", "governance": int(round(s.governance_score)),
+        "why_this_score": s.rationale,
+        "scores": {"sentiment": s.company_sentiment if s.company_sentiment is not None else "INSUFFICIENT DATA",
+                   "net_points_of_100": s.sentiment_points, "governance": int(round(s.governance_score)),
                    "governance_label": s.governance_label.upper() if s.governance_label == "Flag" else s.governance_label},
         "penalties_applied": [{"event": p["event_type"].replace("_", " "), "penalty": p["penalty"], "date": p["date"],
                                "headline": p["headline"]} for p in s.governance_penalties],
@@ -81,7 +84,7 @@ def evidence_payload(s: StockScore, items: list[LabelledItem]) -> dict:
         "not_penalised": [{"event": p["event_type"].replace("_", " "), "date": p["date"], "headline": p["headline"], "why": p["why"]}
                           for p in s.governance_ignored],
         "low_confidence": s.low_confidence,
-        "evidence": [{"date": li.item.published, "headline": li.item.title, "snippet": li.item.snippet,
+        "evidence": [{"date": li.item.published, "headline": li.item.title, "what_it_says": li.label.gist or (li.item.snippet or "")[:300],
                       "event": li.label.event_type.replace("_", " "), "sentiment": li.label.sentiment,
                       "governance_flag": li.label.governance_flag, "historical": li.label.historical,
                       "rationale": li.label.rationale}
@@ -111,10 +114,10 @@ class TemplateNarrator:
         line = lambda li: f"{li.item.title.rstrip('.')} ({li.item.published})"
         sr = ([f"Insufficient data: {s.sentiment_note.replace('INSUFFICIENT DATA: ', '')}. No sentiment score is issued rather than a forced +1 or 0."]
               if s.company_sentiment is None else
-              [f"Sentiment {fmt_sent(s.company_sentiment)} (recency-weighted mean {s.company_sentiment_raw}) from {len(news)} dated news item(s)."])
-        if pos:
+              [s.rationale.split(" Governance ")[0]])
+        if pos and not s.rationale:
             sr.append("Positive evidence: " + "; ".join(line(x) for x in pos) + ".")
-        if neg:
+        if neg and not s.rationale:
             sr.append("Negative evidence: " + "; ".join(line(x) for x in neg) + ".")
         pens = s.governance_penalties
         if pens:
