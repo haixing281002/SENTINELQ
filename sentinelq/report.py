@@ -188,8 +188,13 @@ def write_reports(out: Path, res: dict, rubric) -> None:
             it, l = li.item, li.label
             t = treat.get(id(li), {"counted": "no", "share": 0, "wweight": "", "points": "", "why": ""})
             d = parse_date(it.published)
+            parse = it.parse or ""
+            read_from = ("full text" if parse.startswith("full-text") else
+                         "headline only - site gave no readable text (blocked, paywalled, or empty page)" if "no text" in parse else
+                         "headline only - ran out of read time for this stock (site was slow)" if "timed out" in parse else
+                         "headline only")
             art_rows.append([sym, names.get(sym, ""), wname[win(li)], it.published, (as_of - d).days if d else "", it.title, it.source,
-                             "full text" if (it.parse or "").startswith("full-text") else "headline only", l.gist or "",
+                             read_from, l.gist or "",
                              l.event_type, l.sentiment, l.rationale, t["counted"], t.get("wweight", ""), t["points"], t["why"],
                              pen.get((sym, it.url), "flagged" if l.governance_flag else ""),
                              len(it.members or []) or "", it.url])

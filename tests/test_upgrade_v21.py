@@ -598,7 +598,7 @@ def test_score_rationale_explains_drivers_not_headlines():
     from sentinelq.score import to_points, to_band
     assert f"weighted average article score is {to_points(mean, R):+d} on a -100..+100 scale" in txt and f"Scored {to_band(mean, R):+d}" in txt
     assert "Pushing up" in txt and "Pulling down" in txt and "Q2 profit up 40%" in txt and "Q4 profit collapses" in txt
-    assert "1 neutral" in txt and "not counted" not in txt                                 # v1.9: neutral articles count
+    assert "1 not counted" in txt and "0 neutral" in txt                                # v1.9.1: zeros excluded from the mean, so +2/-2 can surface
     assert explain_sentiment(items, AS_OF, R, {"insufficient": "only 2 event(s)"}).startswith("Sentiment not scored")
 
 

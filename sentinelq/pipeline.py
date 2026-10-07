@@ -306,7 +306,7 @@ class Pipeline:
                 from .ingest.fulltext import enrich
                 reps = [e for e in events if e.kind == "news"]
                 if reps:
-                    enrich(reps, None, workers=32, progress=self.ui.fulltext, budget=30.0)
+                    enrich(reps, None, workers=32, progress=self.ui.fulltext, budget=45.0)   # more workers AND the full budget - maximize full-text reads
                     self.ui.clear_status()
                     got = sum(1 for e in reps if e.parse.startswith("full-text"))
                     self.ui.note(f"        article text read for {got}/{len(reps)} event(s) (headline-only for the rest: paywalled / blocked / slow)", "d")
@@ -676,7 +676,7 @@ class Pipeline:
             if reason:
                 dropped.append(Dropped(h.symbol, it.title, it.url, it.published, "validate", reason))
                 continue
-            li = LabelledItem(it, to_label(label_d), resp, cached, attempts)
+            li = LabelledItem(it, to_label(label_d, it.title), resp, cached, attempts)
             from .lint import price_only
             if it.kind == "news" and li.label.event_type != "price_move" and price_only(it.title, self.r):
                 # Reconciliation fix 5: an item that is only about the share price is not sentiment evidence

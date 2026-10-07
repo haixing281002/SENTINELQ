@@ -103,7 +103,7 @@ def inspect_label(a) -> int:
     print(f"[STEP 4/6 VALIDATE] {'PASS' if verdict is None else 'DROP: ' + verdict}")
     if verdict is None:
         from .score import gate
-        li = LabelledItem(item, to_label(lab), raw)
+        li = LabelledItem(item, to_label(lab, item.title), raw)
         p, why, bucket = gate(li, r)
         keys = ("event_type", "subject", "occurred_at_company", "action_stage", "severity", "amount_inr_cr", "people_direction", "role_tier", "event_key")
         print("  gate answers:", {k: lab.get(k) for k in keys if lab.get(k) is not None})

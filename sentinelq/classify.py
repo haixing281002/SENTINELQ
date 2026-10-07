@@ -238,8 +238,20 @@ class KeywordClassifier:
         return lab, json.dumps(lab)
 
 
-def to_label(d: dict) -> Label:
-    return Label(d["event_type"], d["sentiment"], d["rationale"], bool(d["governance_flag"]),
+def _not_a_headline_copy(rationale: str, title: str, event_type: str, sentiment: int) -> str:
+    """Guard against the model restating the headline as its rationale (explicitly forbidden in the prompt, but a cheap safety net
+    costs nothing): if the rationale's words are mostly just the headline's words, swap in an honest placeholder instead."""
+    import re
+    rt = set(re.findall(r"[a-z0-9]{3,}", (rationale or "").lower()))
+    tt = set(re.findall(r"[a-z0-9]{3,}", (title or "").lower()))
+    if not rationale or (tt and len(rt & tt) / len(rt | tt or {1}) >= 0.75):
+        return f"No distinct rationale was given for this {event_type.replace('_', ' ')} call (scored {sentiment:+d}) - the model's reply just repeated the headline."
+    return rationale
+
+
+def to_label(d: dict, title: str = "") -> Label:
+    rationale = _not_a_headline_copy(d["rationale"], title, d["event_type"], d["sentiment"])
+    return Label(d["event_type"], d["sentiment"], rationale, bool(d["governance_flag"]),
                  d.get("materiality"), historical=bool(d.get("historical", False)),
                  relevant=bool(d.get("about_company", True)),
                  subject=d.get("subject"), occurred_at_company=d.get("occurred_at_company"), action_stage=d.get("action_stage"),

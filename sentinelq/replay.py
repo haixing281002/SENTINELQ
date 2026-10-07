@@ -194,7 +194,7 @@ def relabel(as_of: date, prompt: str | None, classifier, corpus_dir=None, model_
         if d is None:
             failed += 1
             continue
-        lab = to_label(d)
+        lab = to_label(d, it.title)
         gate = {k: getattr(lab, k) for k in ("subject", "occurred_at_company", "action_stage", "severity", "amount_inr_cr", "people_direction", "role_tier", "event_key")}
         out_rows.append({**e, "event_type": lab.event_type, "sentiment": lab.sentiment, "is_governance_flag": lab.governance_flag,
                          "governance_flag_type": lab.event_type if lab.governance_flag else None, "justification": lab.rationale, "gate_json": gate,

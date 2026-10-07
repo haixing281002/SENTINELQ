@@ -1,5 +1,5 @@
 {
-  "version": "1.9.0",
+  "version": "1.9.1",
   "_note": "Single source of truth for every weight, penalty and taxonomy entry. Scores change only if this file changes. Values marked 'assumed' were not stated in the architecture document and should be confirmed by the committee.",
   "event_types": [
     "earnings_beat",
@@ -60,7 +60,7 @@
     ],
     "min_span_days": 270,
     "insufficient_note": "Below the minimum evidence standard sentiment reports Insufficient Data rather than a forced +1 or 0 (Reconciliation fix 6).",
-    "aggregation": "all_events",
+    "aggregation": "signal_events",
     "min_signal_events": 3,
     "plus_two_requires_no_results_offset": false,
     "aggregation_note": "Anchored at 0: a 0 label is no signal and neither adds nor subtracts. Every non-zero event pulls in its direction with recency x confidence weight; the score is the net of all positives against all negatives (falls back to the all-event mean below min_signal_events). The two veto rules (plus_two_requires_no_results_offset, minus_one_when_results_negative) are OFF: the IC can switch them on if it decides results prints should override the net weighing.",
