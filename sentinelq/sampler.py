@@ -40,7 +40,7 @@ def _tkey(title: str) -> str:
 
 
 def stratified_sample(items: list[RawItem], as_of: date, tokens: list[str], windows=SAMPLE_WINDOWS,
-                      per_day_cap: int = PER_DAY_CAP) -> tuple[list[RawItem], list[RawItem], dict]:
+                      per_day_cap: int = PER_DAY_CAP, cap: bool = True) -> tuple[list[RawItem], list[RawItem], dict]:
     """Returns (selected, extras, report). `selected` carries .window (1..4) and counts against the budget; `extras` are the
     per-day overflow (also .window set, .sample_extra = True) to be attached to that day's cluster as extra sources.
     report = {"windows": {1: n, ...}, "quota": {1: q, ...}, "carry": {...}, "usable": N, "syndicated": M, "per_day_extra": E}."""
@@ -110,11 +110,17 @@ def stratified_sample(items: list[RawItem], as_of: date, tokens: list[str], wind
             got = take_from(k, carry)
             carry -= got
             carry_log[k]["rolled_back"] = carry_log[k].get("rolled_back", 0) + got
-    # anything usable but never selected (over budget) is simply not part of the sample; it is counted so the audit can show it
+    # anything usable but never selected (over budget): with cap=False (the default run) it is scored too - the windows then only
+    # set the recency weight; with cap=True (--budget / --window-quotas) it is left out and counted so the audit can show it
     over = [i for i in usable if id(i) not in picked]
+    if not cap and over:
+        selected += over
+        for i in over:
+            picked.add(id(i))
+        over = []
     report = {"windows": {k: taken[k] for k in pools}, "quota": quota, "carry": carry_log, "usable": len(usable),
               "unique_titles": len(uniq), "syndicated": syndicated, "per_day_extra": len(extras), "over_budget": len(over),
-              "budget": sum(quota.values()), "selected": len(selected), "boilerplate": len(boiler)}
+              "budget": sum(quota.values()) if cap else len(usable), "capped": cap, "selected": len(selected), "boilerplate": len(boiler)}
     return sorted(selected, key=lambda x: (x.published, x.relevance), reverse=True), extras, report
 
 

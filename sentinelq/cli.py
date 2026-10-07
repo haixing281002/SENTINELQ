@@ -71,7 +71,8 @@ def main(argv=None):
     p.add_argument("--work", default="work", help="dir for hand-off files (file mode)")
     p.add_argument("--corpus-dir", default="audit", help="corpus of record (append-only tables: articles, events, verifications, scores, manifest)")
     p.add_argument("--no-corpus", action="store_true", help="do not append this run to the corpus of record")
-    p.add_argument("--budget", type=int, default=None, help="sentiment-pass article budget (default 100 = 40/25/20/15 over W1..W4; the shape is kept)")
+    p.add_argument("--budget", type=int, default=None, help="optional cap on sentiment-pass articles per stock (e.g. 100 = 40/25/20/15 over W1..W4). "
+                   "Default: no cap - every usable article is scored; windows only set the recency weight")
     p.add_argument("--window-quotas", default=None, help="explicit quotas for W1,W2,W3,W4 e.g. 60,40,30,20 (overrides --budget)")
     p.add_argument("--no-corpus-union", action="store_true", help="do not add governance events already on record (earlier runs) to this run")
     p.add_argument("--legacy-sampler", action="store_true", help="latest-N newest-first sampling (pre-v2.1) instead of the stratified windows")

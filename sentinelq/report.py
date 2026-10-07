@@ -146,10 +146,14 @@ def write_reports(out: Path, res: dict, rubric) -> None:
                                   "Penalties older than 6 months fade to half by 12 months."),
              ("Governance Label", "Clean 95+  |  Watch 80-94  |  Flag below 80. Thresholds unchanged."),
              ("Governance - why", "Each penalty applied, with date and headline; items checked but not penalised are listed in 'Evidence - Governance'."),
-             ("Articles by window", "Articles scored in W1 0-30 days / W2 31-90 / W3 91-180 / W4 181-365 (sample targets 40/25/20/15)."),
+             ("Articles by window", "Articles scored in W1 0-30 days / W2 31-90 / W3 91-180 / W4 181-365. Every usable article is scored "
+                                    "(no budget cap); the window only sets its weight."),
              ("", ""),
              ("Other sheets", ""),
-             ("Articles by window", "Every sampled article: what it says, its score and why, and what it did to the stock's score (filter by Symbol / Window)."),
+             ("Articles by window", "Every sampled article: what it says, its score and why, and what it did to the stock's score (filter by Symbol / Window). "
+                                   "'Read from' = full text / headline only (site blocked or paywalled) / 'read headline by model, irrelevant' "
+                                   "(the model read it: no company event, or a different company) / 'duplicate news with diff boilerplate' (the same "
+                                   "story from another outlet or in other words - listed so the merge can be checked; scored once on the row it names)."),
              ("Window summary", "Per stock and window: articles scored, sampled-but-not-scored, the +2..-2 counts and the points each window added."),
              ("Evidence - Governance", "Every governance item: penalty applied, or why it was not penalised.")]
     for r_ in guide:
@@ -185,6 +189,8 @@ def write_reports(out: Path, res: dict, rubric) -> None:
                              pen.get((sym, it.url), "flagged" if l.governance_flag else ""),
                              len(it.members or []) or "", it.url])
     # Articles that were in the window sample but did not reach the score: shown too, with the plain reason (and the model's read when it read one)
+    READ_REJECTED = "read headline by model, irrelevant"            # the model read it and found no company event / wrong company
+    DUPLICATE = "duplicate news with diff boilerplate"              # the same story was already kept - scored once there
     why_drop = {"model_boilerplate": "templated piece with no company event (judged boilerplate on reading)",
                 "not_about_company": "not about this company (e.g. a different company with a similar name, or a list)",
                 "label_failed": "the model could not label it",
@@ -208,8 +214,19 @@ def write_reports(out: Path, res: dict, rubric) -> None:
         age = (as_of - dd).days if dd else None
         k = next((i for i, (lo, hi, _) in enumerate(SAMPLE_WINDOWS, 1) if age is not None and lo <= age <= hi), len(SAMPLE_WINDOWS))
         art_rows.append([d_.symbol, names.get(d_.symbol, ""), wname[k], d_.date, age if age is not None else "", d_.headline, "",
-                         "read by model" if j else "not read", j.get("gist", ""), j.get("event_type", ""), j.get("sentiment", ""),
+                         READ_REJECTED if j else DUPLICATE, j.get("gist", ""), j.get("event_type", ""), j.get("sentiment", ""),
                          j.get("rationale", ""), "no", "", "", "not scored: " + why_drop[code], "", "", d_.url])
+    # Copies merged into an event (same story in other words / other outlets): one row each, so every merge can be checked
+    for sym in sorted(arts):
+        for li in arts[sym]:
+            for m in li.item.members or []:
+                md = parse_date(m.get("date", ""))
+                age = (as_of - md).days if md else None
+                k = next((i for i, (lo, hi, _) in enumerate(SAMPLE_WINDOWS, 1) if age is not None and lo <= age <= hi), len(SAMPLE_WINDOWS))
+                art_rows.append([sym, names.get(sym, ""), wname[k], m.get("date", ""), age if age is not None else "", m.get("headline", ""),
+                                 m.get("source", ""), DUPLICATE, "", li.label.event_type, "", "", "no", "", "",
+                                 f"not scored again: same story as '{li.item.title[:90]}' ({li.item.published}) - scored once there",
+                                 "", "", m.get("url", "")])
     art_rows.sort(key=lambda r_: (r_[0], r_[2], -(parse_date(r_[3]) or as_of).toordinal()))
 
     W = {"Headline": 60, "What the article says": 80, "Why this score": 80, "How it was treated": 55, "Source URL": 40, "Event type": 20,

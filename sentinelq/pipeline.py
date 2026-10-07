@@ -147,7 +147,8 @@ class Pipeline:
         self.stratified, self.news_choice, self.golden_file, self.corpus_union = stratified, news_choice, golden_file, corpus_union
         from .sampler import scaled_windows
         self.windows = scaled_windows(budget, window_quotas)
-        self.budget = sum(q for _, _, q in self.windows)
+        self.cap_budget = budget is not None or window_quotas is not None      # default: no cap - every usable article is scored
+        self.budget = sum(q for _, _, q in self.windows) if self.cap_budget else None
         self.started = datetime.now()
         self._sample_reports: dict[str, dict] = {}
         self._extras: dict[str, list] = {}
@@ -187,7 +188,7 @@ class Pipeline:
             acts = [i for i in items if i.kind != "news"]
             for a in acts:
                 a.pass_ = "actions"
-            selected, extras, rep = stratified_sample(news_all, self.as_of, toks, windows=self.windows)
+            selected, extras, rep = stratified_sample(news_all, self.as_of, toks, windows=self.windows, cap=self.cap_budget)
             for i in selected + extras:
                 i.pass_, i.purpose = "sentiment", "sentiment"
             self._sample_reports[h.symbol], self._extras[h.symbol] = rep, extras
@@ -354,7 +355,8 @@ class Pipeline:
             if rep:
                 ws = " ".join(f"W{k}:{rep['windows'][k]}/{rep['quota'][k]}" for k in rep["windows"])
                 back = sum(c.get("rolled_back", 0) for c in rep["carry"].values())
-                ui.note(f"        stratified sample: {ws} = {rep['selected']}/{rep['budget']} ({rep['usable']} usable titles; {rep.get('boilerplate', 0)} boilerplate dropped; "
+                ui.note(f"        {'stratified sample' if rep.get('capped', True) else 'all usable articles (no budget cap)'}: {ws} = {rep['selected']}/{rep['budget']} "
+                        f"({rep['usable']} usable titles; {rep.get('boilerplate', 0)} boilerplate dropped; "
                         f"{rep['per_day_extra']} per-day extras ride as sources; {rep['syndicated']} syndicated copies"
                         + (f"; {back} carried back to the newest windows" if back else "") + ")", "d")
             ui.ingest_stock(idx, n, h, found, len(nn), len(items) - len(nn) - gv, Counter(i.style for i in nn), False, err_txt,
@@ -503,8 +505,8 @@ class Pipeline:
 
     def _stamp(self, source_mode: str) -> str:
         """B6 honesty stamp for the scorecard header."""
-        shape = "/".join(str(q) for _, _, q in self.windows)
-        return (f"{source_mode} · as_of {self.as_of.isoformat()} · budget {self.budget} ({shape}) · universe {self.universe_hash[:8] or 'n/a'} · prompt {PROMPT_VERSION} ({PROMPT_REVISION}) · "
+        shape = "/".join(str(q) for _, _, q in self.windows) if self.cap_budget else "no cap, weights 1/.75/.5/.25"
+        return (f"{source_mode} · as_of {self.as_of.isoformat()} · budget {self.budget if self.cap_budget else 'all'} ({shape}) · universe {self.universe_hash[:8] or 'n/a'} · prompt {PROMPT_VERSION} ({PROMPT_REVISION}) · "
                 f"rubric v{self.r.version} ({self.r.sha256[:8]}) · model_label {self.clf.model_id} · model_verify python-gate")
 
     def _golden_gate(self) -> dict:
