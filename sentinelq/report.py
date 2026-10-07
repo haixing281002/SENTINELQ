@@ -140,7 +140,10 @@ def write_reports(out: Path, res: dict, rubric) -> None:
              ("Net evidence (-100..+100)", "The weighted average of those article scores x 50. Weights: W1 (0-30 days) 1.0, W2 (31-90) 0.75, "
                                            "W3 (91-180) 0.5, W4 (181-365) 0.25. Neutral (0) articles count and pull toward 0. It decides the band below."),
              ("Bands", f"+2: {band_txt[2]}   |   +1: {band_txt[1]}   |   0: {band_txt[0]}   |   -1: {band_txt[-1]}   |   -2: {band_txt[-2]}"),
-             ("Sentiment - why", "Which band the net falls in, how many events pushed up vs down, and how much of the weight is recent."),
+             ("Sentiment - why", "Which band the net falls in, how many events pushed up vs down, and how much of the weight is recent. "
+                                "Every article about the company is read and scored; a neutral (0) routine/administrative item (e.g. a routine "
+                                "board or management change, or a generic piece with no stated impact) is shown but not counted in the average - "
+                                "it carries no sentiment information, the same as a bare share-price move."),
              ("Main positives / negatives", "The three articles that moved the score most each way: article score | date | headline (points it added)."),
              ("Governance Score", "Starts at 100; fixed penalties for verified adverse events (regulator orders, auditor exits, CXO exits...). "
                                   "Penalties older than 6 months fade to half by 12 months."),
@@ -153,7 +156,9 @@ def write_reports(out: Path, res: dict, rubric) -> None:
              ("Articles by window", "Every sampled article: what it says, its score and why, and what it did to the stock's score (filter by Symbol / Window). "
                                    "'Read from' = full text / headline only (site blocked or paywalled) / 'read headline by model, irrelevant' "
                                    "(the model read it: no company event, or a different company) / 'duplicate news with diff boilerplate' (the same "
-                                   "story from another outlet or in other words - listed so the merge can be checked; scored once on the row it names)."),
+                                   "story from another outlet or in other words - listed so the merge can be checked; scored once on the row it names). "
+                                   "Every article the search found is a row here, including ones never sent to the model (headline didn't name the "
+                                   "company, templated pattern, outside the lookback) - 'How it was treated' gives the exact reason for every one."),
              ("Window summary", "Per stock and window: articles scored, sampled-but-not-scored, the +2..-2 counts and the points each window added."),
              ("Evidence - Governance", "Every governance item: penalty applied, or why it was not penalised.")]
     for r_ in guide:
@@ -196,7 +201,11 @@ def write_reports(out: Path, res: dict, rubric) -> None:
                 "label_failed": "the model could not label it",
                 "results_quota_one_print_per_quarter": "another article on the same quarter's results was kept (one results print per quarter)",
                 "results_quota_other_per_quarter": "over the per-quarter limit for other results-type stories",
-                "per_day_cap_no_same_day_cluster": "over the per-day cap for that date"}
+                "per_day_cap_no_same_day_cluster": "over the per-day cap for that date",
+                "title_does_not_name_company": "the headline never names the company (no match on its name, ticker or known aliases) - never sent to the model",
+                "boilerplate_headline": "a templated headline pattern (e.g. 'share price today', 'stocks to watch') - never sent to the model",
+                "outside_lookback": "dated outside the 12-month lookback window",
+                "syndicated_duplicate": "an identical headline already kept from the same day - this copy adds no new information"}
     rawlab = {}
     for r_ in res.get("raw_log") or []:
         try:

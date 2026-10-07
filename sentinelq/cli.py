@@ -45,8 +45,9 @@ def main(argv=None):
     p.add_argument("--coverage", default="", help="coverage blurb on page 1")
     p.add_argument("--narrator", choices=["claude-code", "file", "anthropic", "template"], default=None,
                    help="prose writer for the PDF (default: same as --classifier)")
-    p.add_argument("--batch-size", type=int, default=8, help="items per claude call (claude-code mode)")
-    p.add_argument("--workers", type=int, default=2, help="parallel claude calls (lower if you hit rate limits)")
+    p.add_argument("--batch-size", type=int, default=16, help="items per claude call (claude-code mode)")
+    p.add_argument("--workers", type=int, default=6, help="parallel claude calls per stock (lower if you hit rate limits)")
+    p.add_argument("--label-stocks", type=int, default=2, help="stocks read + labelled at the same time (each with --workers calls)")
     p.add_argument("--allow-partial-labels", action="store_true", help="write the report even if many items failed to label")
     p.add_argument("--progress", choices=["auto", "live", "plain", "off"], default="auto",
                    help="live = redrawing bar (real terminal); plain = line-by-line (logs, Claude Code); auto picks")
@@ -167,7 +168,7 @@ def main(argv=None):
                     news_choice=a.news, golden_file=a.golden_file, corpus_union=not a.no_corpus_union, budget=a.budget,
                     window_quotas=[int(x) for x in a.window_quotas.split(",")] if a.window_quotas else None,
                     filings=(__import__("sentinelq.ingest.filings", fromlist=["BseAnnouncements"]).BseAnnouncements() if a.filings == "bse" and a.news != "file" else None),
-                    fetch_text_events=not a.headline_only and a.news != "file")
+                    fetch_text_events=not a.headline_only and a.news != "file", label_stocks=a.label_stocks)
     ingested = None
     if a.classifier == "file":
         ingested = pipe.ingest(holdings)

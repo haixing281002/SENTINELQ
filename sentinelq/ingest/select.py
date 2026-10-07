@@ -28,8 +28,7 @@ def name_tokens(h: Holding) -> list[str]:
         out.add(a.lower())
     words = [w for w in re.findall(r"[a-z0-9&']+", h.name.lower()) if len(w) >= 2]
     distinct = [w for w in words if w not in _GENERIC] or words
-    if not getattr(h, "aliases", ""):
-        out.update(distinct)
+    out.update(distinct)   # the company's own registered-name words always count, in addition to any aliases given (never instead of them)
     return sorted(t for t in out if t)
 
 

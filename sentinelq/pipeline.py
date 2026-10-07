@@ -124,7 +124,8 @@ class Pipeline:
                  fundamentals_pass: bool = True, fundamentals_cap: int = 40, retrieval_mode: str = "live", run_date: date | None = None,
                  verified_events: str | Path | None = None, universe_hash: str = "", stratified: bool = True,
                  corpus_dir: str | Path | None = None, news_choice: str = "", golden_file: str | Path | None = None, corpus_union: bool = True,
-                 budget: int | None = None, window_quotas: list[int] | None = None, filings=None, fetch_text_events: bool = False):
+                 budget: int | None = None, window_quotas: list[int] | None = None, filings=None, fetch_text_events: bool = False,
+                 label_stocks: int = 2):
         self.r, self.news, self.actions, self.prices, self.clf = rubric, news, actions, prices, classifier
         self.out = Path(out_dir)
         self.cache = LabelCache(cache_path if disk_cache else None)   # label cache holds hash -> label only, no article text
@@ -133,6 +134,7 @@ class Pipeline:
         self.max_articles = max_articles
         self.max_label_failure = max_label_failure
         self.fetch_text, self.fetch_text_events, self.filings = fetch_text, fetch_text_events, filings
+        self.label_stocks = max(1, label_stocks)
         self.governance_pass, self.governance_cap = governance_pass, governance_cap
         self.fundamentals_pass, self.fundamentals_cap = fundamentals_pass, fundamentals_cap
         self.retrieval_mode, self.run_date, self.verified_events, self.universe_hash = retrieval_mode, run_date or date.today(), verified_events, universe_hash
@@ -304,7 +306,7 @@ class Pipeline:
                 from .ingest.fulltext import enrich
                 reps = [e for e in events if e.kind == "news"]
                 if reps:
-                    enrich(reps, None, progress=self.ui.fulltext, budget=45.0)
+                    enrich(reps, None, workers=32, progress=self.ui.fulltext, budget=30.0)
                     self.ui.clear_status()
                     got = sum(1 for e in reps if e.parse.startswith("full-text"))
                     self.ui.note(f"        article text read for {got}/{len(reps)} event(s) (headline-only for the rest: paywalled / blocked / slow)", "d")
@@ -719,7 +721,7 @@ class Pipeline:
             self._wire_classifier()
             ui.stage("Ingest", "streaming per stock: scrape newest-first -> read -> label -> validate (in memory, nothing stored)")
             done: dict[str, tuple] = {}
-            with ThreadPoolExecutor(1) as labeller:      # reads stock N while the scraper is already on stock N+1
+            with ThreadPoolExecutor(self.label_stocks) as labeller:      # reads + labels N stocks at once while the scraper runs ahead
                 futs = {}
                 raw, ingest_errors = self._scrape_all(holdings, lambda h, items: futs.__setitem__(h.symbol, labeller.submit(self._label_stock, h, items)))
                 for sym, f in futs.items():
@@ -811,7 +813,7 @@ class Pipeline:
         ui.stage("Report", "workbook, commentary per stock, portfolio observations, PDF")
         narr, done_n, lint = {}, 0, []
         from .lint import strip_price_sentences
-        with ThreadPoolExecutor(2) as ex:
+        with ThreadPoolExecutor(6) as ex:                                 # commentary: six holdings at a time
             for sc, out in zip(scores, ex.map(lambda sc: self.narrator.holding(sc, kept[sc.symbol]), scores)):
                 clean, removed = strip_price_sentences(out.get("sentiment_rationale", ""), self.r)     # Reconciliation fix 5
                 if removed:

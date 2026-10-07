@@ -50,9 +50,13 @@ def event_weight(li: LabelledItem, as_of: date, r: Rubric) -> float:
 
 
 def feeds_sentiment(li: LabelledItem) -> bool:
-    """News from the sentiment / results passes, not price-only, and substantively about the company (a passing mention is coverage, not signal)."""
+    """News from the sentiment / results passes, not price-only, and substantively about the company (a passing mention is coverage, not
+    signal). A zero-sentiment NOISE_ZERO_TYPES event (routine admin with no stated impact) is excluded the same way price_move is - it is
+    not a balanced/neutral event, it carries no sentiment information at all; the same event type with a non-zero label still feeds in."""
+    from .config import NOISE_ZERO_TYPES
     return (li.item.kind == "news" and li.item.purpose == "sentiment" and li.label.event_type != "price_move"
-            and getattr(li.label, "substance", "primary") != "passing")
+            and getattr(li.label, "substance", "primary") != "passing"
+            and not (li.label.sentiment == 0 and li.label.event_type in NOISE_ZERO_TYPES))
 
 
 def sentiment_terms(items: list[LabelledItem], as_of: date, r: Rubric) -> tuple[list[tuple[LabelledItem, float, bool, str]], float | None, str]:
@@ -531,11 +535,13 @@ def event_treatment(items: list[LabelledItem], as_of: date, r: Rubric) -> dict[i
         out[id(li)] = ({"counted": "yes", "share": round(100 * w / den), "wweight": round(100 * w), "points": round(w * li.label.sentiment / den * k),
                         "why": f"counted: score {li.label.sentiment:+d} x window weight {w:g} ({round(100 * w / den)}% of this stock's weight)"}
                        if ok else {"counted": "no", "share": 0, "wweight": "", "points": "", "why": "not counted: " + why})
+    from .config import NOISE_ZERO_TYPES
     for li in items:
         if id(li) not in out and li.item.kind == "news":
             why = ("governance article - feeds the governance score, not sentiment" if li.item.purpose != "sentiment"
                    else "share-price-only item - prices never feed sentiment" if li.label.event_type == "price_move"
                    else "the company is only mentioned in passing" if getattr(li.label, "substance", "primary") == "passing"
+                   else "a neutral routine/administrative item carries no sentiment information" if (li.label.sentiment == 0 and li.label.event_type in NOISE_ZERO_TYPES)
                    else "excluded")
             out[id(li)] = {"counted": "no", "share": 0, "wweight": "", "points": "", "why": "not counted: " + why}
     return out

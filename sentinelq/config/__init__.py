@@ -37,6 +37,11 @@ BOILERPLATE_PATTERNS = [
 ]
 MERGE_RESULTS_SAME_QUARTER = True   # results-type events of the same type in the same quarter are ONE event (sources pooled)
 
+# A zero from one of these event types is administrative, not a balanced/no-reaction event - it carries no sentiment information,
+# the same way a price_move article carries none. Routed out of the sentiment average (still shown, still counted for coverage);
+# a NON-zero label of the same type (the model found a stated impact) still counts normally.
+NOISE_ZERO_TYPES = {"other", "management_change_routine", "board_change_routine", "dilution", "rpt_routine"}
+
 # A4 - minimum evidence (replaces 'fewer than 8 articles')
 MIN_EVENTS = 6
 MIN_WINDOWS = 2
