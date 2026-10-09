@@ -347,9 +347,10 @@ def write_reports(out: Path, res: dict, rubric) -> None:
         row[3].fill = PatternFill("solid", fgColor=band_fill.get(row[3].value, "FFFFFF"))
         row[3].font = Font(bold=True)
 
-    sourcing = lambda e: (f"{e['source']} ({e['max_tier']}), {e['n_sources']} source" + ("s" if e["n_sources"] != 1 else "")
+    sourcing = lambda e: (f"{e['source']}" + (f" ({e['max_tier']})" if e.get("max_tier") else "") + f", {e['n_sources']} source" + ("s" if e["n_sources"] != 1 else "")
                           + (f", confidence {e['confidence']:.0%}" if e.get("confidence") is not None else "")
-                          + ("  ⚠ single lower-tier source - treat the date/facts as unconfirmed" if e["n_sources"] == 1 and e.get("max_tier") in ("T3", "T4") else ""))
+                          + ("  ⚠ single lower-tier source - treat the date/facts as unconfirmed" if e["n_sources"] == 1 and e.get("max_tier") in ("T3", "T4") else "")
+                          + ("  (structured corporate-action record, not a news article - no source tier applies)" if not e.get("max_tier") and not e.get("confidence") else ""))
     ca_rows = []
     for s in scores:
         for e in s.ca_events:
