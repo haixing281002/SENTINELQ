@@ -12,21 +12,19 @@ from typing import Protocol
 
 from .models import LabelledItem, StockScore
 
-CA_TYPES = {"dividend", "buyback", "split_bonus", "dilution", "merger_acquisition", "capacity_expansion", "special_dividend",
-            "rights_issue", "demerger", "open_offer_takeover", "lock_in_expiry", "pledge", "pledge_invocation", "insolvency_admission"}
+CA_TYPES = {"dividend", "buyback", "dilution", "capacity_expansion", "open_offer_takeover", "lock_in_expiry", "pledge", "pledge_invocation", "insolvency_admission"}
 
 SYSTEM = (
     "You write the analyst commentary for an investment-committee scorecard (house style: plain, factual, precise, "
-    "no hype, no advice). The scores and penalties are FINAL and were computed by fixed rules; you must not change, "
-    "re-derive or contradict them. Use ONLY the evidence rows supplied (each has a date, headline, label and URL); "
+    "no hype, no advice). Scores are computed separately by fixed rules and shown elsewhere in the report; your text "
+    "explains the evidence in words and NEVER states a score, band, label, mean, points or penalty number. Use ONLY the evidence rows supplied (each has a date, headline, label and URL); "
     "add no facts from memory. Cite dates in the form 30-Apr-26 and figures exactly as they appear in the evidence. "
     "Write 'Rs' for rupees (never the rupee symbol). If evidence is thin or sources conflict, say so explicitly in the "
     "rationale itself, as a plain statement about coverage (for example 'only two dated items were retrieved'). "
     "PRICE RULE: never mention share-price moves, 52-week highs, rallies or sell-offs in the sentiment rationale (price is context only; if essential, wrap the sentence in [context]). "
     "STYLE RULES: write the finished report text, never commentary about your inputs - do not say 'the evidence', 'the facts "
     "supplied', 'rows', 'payload' or 'provided'. Never print URLs. Write event types as words ('regulatory action', not "
-    "regulatory_action). Write dates without a leading zero (5-Jun-26). Scores are whole numbers (72, not 72.0); never mention "
-    "unrounded values. Use a real minus sign or plain hyphen for negatives (-20). Answer by calling the tool."
+    "regulatory_action). Write dates without a leading zero (5-Jun-26). Use a real minus sign or plain hyphen for negatives (-20). Answer by calling the tool."
 )
 
 TOOL = {
@@ -36,36 +34,23 @@ TOOL = {
         "type": "object",
         "properties": {
             "sentiment_rationale": {"type": "string", "description": (
-                "Two short paragraphs separated by a blank line. Paragraph 1: the positive case with dated, sourced facts "
-                "and figures (results, guidance, broker views). Paragraph 2: the offsets or the absence of offsets in the "
-                "twelve-month window, ending with a sentence that explains why the fixed sentiment score stands, citing the supplied "
-                "WEIGHTED mean and band on the -2..+2 scale (e.g. 'The weighted mean is +1.78, inside the +2 band (>= 1.6): sustained "
-                "beats with no counterweight.'), and naming the RAW (unweighted) mean alongside it if it differs meaningfully from the "
-                "weighted one (e.g. 'the raw, unweighted average of the same articles is +0.9, a milder +1 - recent news is doing the work'). "
-                "Use the supplied scores verbatim, to 2 decimal places for the means; never re-derive them. 'why_this_score' lists the "
-                "events that moved the score most - lead with those.")},
+                "Two short paragraphs separated by a blank line. Paragraph 1: the positive case with dated, sourced facts and the "
+                "company's own figures (growth %, Rs crore, guidance, broker views). Paragraph 2: the offsets, or the absence of "
+                "offsets, in the twelve-month window, ending with one sentence on why the year reads the way it does. NEVER state "
+                "any SentinelQ score, mean, band, rating, points or label - no '+1', no 'weighted mean', no 'band'. Explain in words.")},
             "ca_rationale": {"type": "string", "description": (
-                "One to two short paragraphs on Corporate Actions, SEPARATE from sentiment and governance even where an event also "
-                "appears there. Corporate Actions is ONE score (0-10) and band - state it verbatim (e.g. 'Corporate Actions is 4.9 of "
-                "10 (Watch).'). Name the one or two events that drove it, each with its severity x stage x timing x size arithmetic in "
-                "one short clause, not the raw numbers formula - describe it in words (e.g. 'a promoter pledge created in March, "
-                "board-approved and already material in size, is the main driver'). If Gate A fired (forced Exit), say which event and "
-                "that the usual arithmetic was overridden. If Gate B items were quarantined (splits, bonuses, mergers, rights issues, "
-                "special dividends, name/ISIN changes), name them and say they are excluded from the score and held for the "
-                "adjustment-factor checks instead. If the supplied data shows an event-trade review was triggered (a separate flag, not "
-                "a second score - positive-direction events like dividends/buybacks combine into it, and it never changes the score or "
-                "band above), mention it as a separate, final sentence - e.g. 'Separately, the dividend and buyback flow trigger an "
-                "event-trade review; this does not affect the score above.' If any driving event has 'single_lower_tier_source' true, say "
-                "so plainly (e.g. 'reported by a single lower-tier outlet, so its date is unconfirmed') - do not state its date as settled "
-                "fact. If there are no corporate-action events, say so plainly.")},
+                "One to two short paragraphs on the corporate actions that matter, SEPARATE from sentiment and governance even where "
+                "an event also appears there: what happened, how advanced it is (announced / board-approved / approved / completed), "
+                "how recent, and how large, in words. NEVER state any score, band, severity number or multiplier. Only discuss the "
+                "corporate-action events supplied; do not mention anything else. If any event has 'single_lower_tier_source' true, say "
+                "it was reported by a single lower-tier outlet, so its date is unconfirmed. If there are no corporate-action events, "
+                "say so plainly.")},
             "governance_rationale": {"type": "string", "description": (
-                "One to three short paragraphs. If penalties were applied: say which event and its date, then the arithmetic "
-                "in words using ONLY the supplied penalties ('The scoring applies -20 for the disclosed regulatory action to reach 80, "
-                "then a further -8 for the CPO resignation, arriving at 72 (Flag).'). If none: 'No adverse governance events are present "
-                "in the lookback.' Mention routine or out-of-window items that were deliberately not scored, and any memory-discount. "
-                "Use the supplied governance score and label verbatim.")},
+                "One to three short paragraphs. If adverse governance events were found, say which events and their dates, and why "
+                "they matter. If none: 'No adverse governance events are present in the lookback.' Mention routine items that were "
+                "reviewed and deliberately not treated as adverse, and why. NEVER state any score, penalty number or label.")},
             "one_line_read": {"type": "string", "description": "ALWAYS fill this (never empty): 2 to 5 words naming what drives the year, e.g. 'Confirmed compounder', 'Momentum intact', 'Regulatory scar; strong operations'."},
-            "key_corporate_action": {"type": "string", "description": "Terse list of the key corporate actions in the evidence, e.g. 'Div Rs 46 final + Rs 20 interim' or 'Rs 5,633cr buyback @ Rs 12,000 (open 1-Jul)'. An em dash if none."},
+            "key_corporate_action": {"type": "string", "description": "Terse list of the key corporate actions among the supplied corporate-action events only, e.g. 'Div Rs 46 final + Rs 20 interim' or 'Rs 5,633cr buyback @ Rs 12,000 (open 1-Jul)'. An em dash if none."},
             "coverage_note": {"type": "string", "description": "Only if coverage is thin or sources conflict AND the sentiment rationale does not already say so; otherwise return an empty string. Never repeat what the rationale states."},
         },
         "required": ["sentiment_rationale", "governance_rationale", "ca_rationale", "one_line_read", "key_corporate_action", "coverage_note"],
@@ -87,36 +72,49 @@ def fmt_sent(x):
 
 
 def evidence_payload(s: StockScore, items: list[LabelledItem]) -> dict:
+    """What the commentary writer sees. No scores (they are shown elsewhere, not narrated), and nothing about data-quarantined
+    corporate actions (splits, bonuses, ISIN changes...): those carry no economic signal and are kept out of the written report."""
+    hidden = {e["url"] for e in s.ca_gate_b}
     return {
         "company": s.name, "sector": s.sector,
-        "sentiment_status": s.sentiment_note or "ok", "evidence_span": f"{s.evidence_first}..{s.evidence_last}" if s.evidence_first else "none",
-        "coverage_map": s.coverage_map,
-        "why_this_score": s.rationale,
-        "scores": {"sentiment_weighted": s.company_sentiment if s.company_sentiment is not None else "INSUFFICIENT DATA",
-                   "sentiment_weighted_mean": s.sentiment_weighted_mean, "sentiment_raw": s.sentiment_raw_score,
-                   "sentiment_raw_mean": s.sentiment_raw_mean, "governance": int(round(s.governance_score)),
-                   "governance_label": s.governance_label.upper() if s.governance_label == "Flag" else s.governance_label,
-                   "ca_score": s.ca_risk_score, "ca_band": s.ca_risk_band,
-                   "ca_event_trade_review_triggered": s.ca_opportunity_review,
-                   "ca_event_trade_review_opportunity_score": s.ca_opportunity_score if s.ca_opportunity_review else None},
-        "ca_events": [{"event": e["event_type"].replace("_", " "), "date": e["date"], "headline": e["headline"], "score": e["score"],
-                      "direction": e["direction"], "severity": e["severity"], "stage": e["stage"], "n_sources": e["n_sources"],
-                      "source_tier": e["max_tier"], "single_lower_tier_source": e["n_sources"] == 1 and e["max_tier"] in ("T3", "T4")}
-                     for e in sorted(s.ca_events, key=lambda x: -x["score"])],
-        "ca_gate_a": [{"event": e["event_type"].replace("_", " "), "date": e["date"], "headline": e["headline"]} for e in s.ca_gate_a],
-        "ca_gate_b_quarantined": [{"event": e["event_type"].replace("_", " "), "date": e["date"], "headline": e["headline"]} for e in s.ca_gate_b],
-        "penalties_applied": [{"event": p["event_type"].replace("_", " "), "penalty": p["penalty"], "date": p["date"],
-                               "headline": p["headline"]} for p in s.governance_penalties],
-        "governance_start": 100,
-        "not_penalised": [{"event": p["event_type"].replace("_", " "), "date": p["date"], "headline": p["headline"], "why": p["why"]}
-                          for p in s.governance_ignored],
-        "low_confidence": s.low_confidence,
+        "sentiment_status": "insufficient data" if s.company_sentiment is None else "ok",
+        "evidence_span": f"{s.evidence_first}..{s.evidence_last}" if s.evidence_first else "none",
+        "ca_events": [{"event": e["event_type"].replace("_", " "), "date": e["date"], "headline": e["headline"],
+                       "direction": e["direction"], "stage": e["stage"],
+                       "single_lower_tier_source": e["n_sources"] == 1 and e["max_tier"] in ("T3", "T4")}
+                      for e in sorted(s.ca_events, key=lambda x: -x["score"])],
+        "ca_hard_override": [{"event": e["event_type"].replace("_", " "), "date": e["date"], "headline": e["headline"]} for e in s.ca_gate_a],
+        "adverse_governance_events": [{"event": p["event_type"].replace("_", " "), "date": p["date"], "headline": p["headline"]}
+                                      for p in s.governance_penalties],
+        "reviewed_not_adverse": [{"event": p["event_type"].replace("_", " "), "date": p["date"], "headline": p["headline"], "why": p["why"]}
+                                 for p in s.governance_ignored if p.get("url") not in hidden],
+        "low_coverage": s.low_confidence,
         "evidence": [{"date": li.item.published, "headline": li.item.title, "what_it_says": li.label.gist or (li.item.snippet or "")[:300],
                       "event": li.label.event_type.replace("_", " "), "sentiment": li.label.sentiment,
-                      "governance_flag": li.label.governance_flag, "historical": li.label.historical,
-                      "rationale": li.label.rationale}
-                     for li in sorted(items, key=lambda x: x.item.published, reverse=True)],
+                      "governance_flag": li.label.governance_flag, "historical": li.label.historical}
+                     for li in sorted(items, key=lambda x: x.item.published, reverse=True) if li.item.url not in hidden],
     }
+
+
+_HIDE = ("quarantin", "gate b", "bonus", "stock split", "share split", "split and bonus", "bonus and split")
+
+
+def scrub(out: dict) -> dict:
+    """Last line of defence for the per-stock text: drop any sentence that still mentions a quarantined corporate action."""
+    import re
+    clean = {}
+    for k, v in out.items():
+        if isinstance(v, str) and k != "one_line_read":
+            paras = []
+            for para in v.split("\n\n"):
+                sents = re.split(r"(?<=[.!?])\s+", para)
+                kept = [x for x in sents if not any(h in x.lower() for h in _HIDE)]
+                if kept:
+                    paras.append(" ".join(kept))
+            v = "\n\n".join(paras)
+        clean[k] = v
+    return clean
+
 
 
 class Narrator(Protocol):
@@ -139,42 +137,40 @@ class TemplateNarrator:
         pos = [li for li in news if li.label.sentiment > 0][:3]
         neg = [li for li in news if li.label.sentiment < 0][:3]
         line = lambda li: f"{li.item.title.rstrip('.')} ({li.item.published})"
-        sr = ([f"Insufficient data: {s.sentiment_note.replace('INSUFFICIENT DATA: ', '')}. No sentiment score is issued rather than a forced +1 or 0."]
-              if s.company_sentiment is None else
-              [s.rationale.split(" Governance ")[0]])
-        if pos and not s.rationale:
+        hidden = {e["url"] for e in s.ca_gate_b}
+        pos = [li for li in pos if li.item.url not in hidden]
+        neg = [li for li in neg if li.item.url not in hidden]
+        sr = ([f"Insufficient data: {s.sentiment_note.replace('INSUFFICIENT DATA: ', '')}."] if s.company_sentiment is None else [])
+        if pos:
             sr.append("Positive evidence: " + "; ".join(line(x) for x in pos) + ".")
-        if neg and not s.rationale:
+        if neg:
             sr.append("Negative evidence: " + "; ".join(line(x) for x in neg) + ".")
+        if not pos and not neg and s.company_sentiment is not None:
+            sr.append("No clearly positive or negative company-specific news in the lookback.")
         pens = s.governance_penalties
         if pens:
-            arith = " ".join(f"{p['penalty']:+g} ({p['event_type'].replace('_', ' ')}, {p['date']})" for p in pens)
-            gr = f"Start 100 {arith} = {s.governance_score:g} ({s.governance_label})."
+            gr = "Adverse governance events: " + "; ".join(f"{p['event_type'].replace('_', ' ')} ({p['date']})" for p in pens) + "."
         else:
-            gr = f"No penalised governance events in the lookback. Score {s.governance_score:g} ({s.governance_label})."
+            gr = "No adverse governance events are present in the lookback."
         return {"sentiment_rationale": " ".join(sr), "governance_rationale": gr,
                 "one_line_read": "Low-confidence coverage" if s.low_confidence else "",
                 "ca_rationale": self._ca_fallback(s),
                 "key_corporate_action": key_actions(items),
-                "coverage_note": "Sparse news retrieval; treat scores as low confidence." if s.low_confidence else ""}
+                "coverage_note": "Sparse news retrieval; treat this read as low confidence." if s.low_confidence else ""}
 
     @staticmethod
     def _ca_fallback(s):
-        if not s.ca_events and not s.ca_gate_a and not s.ca_gate_b:
-            return "No corporate-action events scored in the lookback."
-        parts = [f"Corporate Actions is {s.ca_risk_score:.1f} of 10 ({s.ca_risk_band})."]
+        if not s.ca_events and not s.ca_gate_a:
+            return "No corporate-action events in the lookback."
+        parts = []
         top = sorted(s.ca_events, key=lambda e: -e["score"])[:2]
         if top:
-            parts.append("Driven by " + "; ".join(f"{e['event_type'].replace('_', ' ')} ({e['date']})" for e in top) + ".")
+            parts.append("Main corporate actions: " + "; ".join(f"{e['event_type'].replace('_', ' ')} ({e['date']})" for e in top) + ".")
             weak = [e for e in top if e["n_sources"] == 1 and e["max_tier"] in ("T3", "T4")]
             if weak:
                 parts.append("Reported by a single lower-tier source (" + ", ".join(e["event_type"].replace("_", " ") for e in weak) + "); treat the date as unconfirmed.")
         if s.ca_gate_a:
-            parts.append("Gate A override: " + ", ".join(e["event_type"].replace("_", " ") for e in s.ca_gate_a) + " forces the Exit band.")
-        if s.ca_gate_b:
-            parts.append(f"{len(s.ca_gate_b)} event(s) data-quarantined and excluded from the score.")
-        if s.ca_opportunity_review:
-            parts.append(f"Separately, an event-trade review is triggered (Opportunity {s.ca_opportunity_score:.1f}/10); this does not change the score or band above.")
+            parts.append("Severe event requiring exit review: " + ", ".join(e["event_type"].replace("_", " ") for e in s.ca_gate_a) + ".")
         return " ".join(parts)
 
     def portfolio(self, facts):

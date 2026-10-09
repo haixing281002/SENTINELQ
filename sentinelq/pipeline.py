@@ -19,7 +19,7 @@ import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 
-from .narrate import TemplateNarrator, portfolio_facts
+from .narrate import TemplateNarrator, portfolio_facts, scrub
 from .progress import Display
 from .style import classify_style
 from .ingest.select import count_usable, month_spark, name_tokens, select_articles, select_fundamentals, select_governance
@@ -820,7 +820,7 @@ class Pipeline:
                 if removed:
                     out = {**out, "sentiment_rationale": clean}
                     lint += [{"symbol": sc.symbol, "removed_sentence": x} for x in removed]
-                narr[sc.symbol] = out
+                narr[sc.symbol] = scrub(out)
                 done_n += 1
                 ui.narrate(done_n, len(scores), sc.name, sc.symbol)
         ui.clear_status()
