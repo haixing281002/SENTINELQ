@@ -531,6 +531,8 @@ def corporate_actions(items: list[LabelledItem], r: Rubric, as_of: date) -> dict
     ca = r["corporate_actions"]
     scored, gate_a_hit, gate_b_hit, tracked = [], [], [], []
     for li in unique_actions(items, r):
+        if getattr(li.label, "substance", "primary") == "passing":   # a multi-stock listicle mention is not evidence of an action at THIS company
+            continue
         ev = ca_event_score(li, r, as_of)
         if ev is None:
             continue
