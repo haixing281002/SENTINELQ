@@ -16,7 +16,7 @@ def main(argv=None):
     if args and args[0] == "run":                 # `python -m sentinelq run ...` (Upgrade v2.1 B4) is the normal weekly run
         args = args[1:]
         argv = args
-    if args and args[0] in ("inspect", "verify", "render", "excel", "merge", "learn", "replay", "relabel", "backtest", "diff", "golden"):      # manual-verification tools (see tools.py)
+    if args and args[0] in ("inspect", "verify", "render", "excel", "rescore", "merge", "learn", "replay", "relabel", "backtest", "diff", "golden"):      # manual-verification tools (see tools.py)
         from .tools import main as tools_main
         raise SystemExit(tools_main(args))
     p = argparse.ArgumentParser(prog="sentinelq", description="Sentinel Q pipeline")

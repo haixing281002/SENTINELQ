@@ -269,6 +269,84 @@ def excel(a) -> int:
         f.unlink()
     tmp.rmdir()
     print(f"[STEP 6/6 REPORT] rebuilt {run / 'sentinelq_report.xlsx'} from the saved run files (Price Context / Delta sheets are only written by a live run)")
+
+
+def rescore(a) -> int:
+    """Recompute scores under the current rubric from a finished run's saved labels (no news fetch, no model call for
+    labelling), refresh the commentary (fast - one or two short model calls per holding, reading only the fresh
+    scores/evidence, never re-deriving them), and rewrite BOTH sentinelq_report.xlsx and sentinelq_scorecard.pdf.
+    Use this after an evidence-collection or scoring-rubric change where re-fetching and re-labelling every article
+    would just reproduce the same labels - it is the fast path from 'the numbers moved' to 'here are the new files'."""
+    from collections import defaultdict
+    from concurrent.futures import ThreadPoolExecutor
+    from datetime import date as _d
+    from .claude_code import ClaudeCodeNarrator
+    from .lint import strip_price_sentences
+    from .models import Dropped, Holding
+    from .narrate import TemplateNarrator, portfolio_facts, scrub
+    from .pdf import build_pdf
+    from .report import save_or_sidestep, write_reports
+    from .rubric import load_rubric
+    from .score import score_portfolio
+    run = Path(a.run_dir)
+    ev, saved, meta = _load_run(run)
+    rubric = load_rubric()
+    as_of = _d.fromisoformat(str(meta["as_of"])[:10])
+    kept = defaultdict(list)
+    for r in ev:
+        li = _row_to_item(r)
+        for k in ("confidence", "window", "n_sources", "max_tier", "event_id", "parse", "members", "event_date"):
+            if r.get(k) is not None:
+                setattr(li.item, k, r[k])
+        li.item.pass_ = r.get("pass") or ""
+        kept[r["symbol"]].append(li)
+    rd = lambda n: [json.loads(x) for x in (run / n).read_text(encoding="utf-8").splitlines() if x.strip()] if (run / n).exists() else []
+    dropped_n = {}
+    for d in rd("dropped.jsonl"):
+        dropped_n[d["symbol"]] = dropped_n.get(d["symbol"], 0) + 1
+    hold = [Holding(s_["symbol"], s_["name"], s_["sector"], cap=s_.get("cap", ""), weight=s_.get("weight", "")) for s_ in saved]
+    scores = score_portfolio(hold, kept, dropped_n, as_of, rubric)
+    for s in scores:
+        print(f"  {s.symbol}: sentiment weighted {s.company_sentiment:+d} ({s.sentiment_weighted_mean:+.3f}) / raw {s.sentiment_raw_score:+d} "
+              f"({s.sentiment_raw_mean:+.3f}) | governance {s.governance_score:g} {s.governance_label} | "
+              f"CA {s.ca_risk_score:.2f} {s.ca_risk_band}" + (" | event-trade review" if s.ca_opportunity_review else ""))
+    stats_coverage = meta.get("coverage", [])          # per-stock retrieval stats (for the Excel Coverage sheet) - NEVER the
+                                                        # short "N holdings" display string pdf.py's title page expects
+    meta = dict(meta, rubric=rubric.data, rubric_sha256=rubric.sha256, rubric_version=rubric.version,
+                rescored=f"scores recomputed offline under rubric {rubric.version} from the saved labels")
+    (run / "scores.json").write_text(json.dumps([x.to_dict() for x in scores], indent=2), encoding="utf-8")
+    (run / "run_meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    print(f"[STEP 5/6 SCORE] rescored {len(scores)} stock(s) under rubric {rubric.version}")
+
+    if getattr(a, "narrate", True):
+        narrator = ClaudeCodeNarrator()
+        narr, lint = {}, []
+        with ThreadPoolExecutor(6) as ex:
+            for sc, out in zip(scores, ex.map(lambda sc: narrator.holding(sc, kept[sc.symbol]), scores)):
+                clean, removed = strip_price_sentences(out.get("sentiment_rationale", ""), rubric)
+                if removed:
+                    out = {**out, "sentiment_rationale": clean}
+                    lint += [{"symbol": sc.symbol, "removed_sentence": x} for x in removed]
+                narr[sc.symbol] = scrub(out)
+                print(f"  commentary refreshed for {sc.symbol}")
+        obs = narrator.portfolio(portfolio_facts(scores, kept))
+    else:                                              # --no-narrate: keep the prior commentary, scores/evidence only
+        narr = json.loads((run / "narrative.json").read_text(encoding="utf-8")).get("holdings", {}) if (run / "narrative.json").exists() else {}
+        obs = json.loads((run / "narrative.json").read_text(encoding="utf-8")).get("observations", []) if (run / "narrative.json").exists() else []
+        lint = []
+
+    res = {"scores": scores, "kept": kept,
+           "run": {k: v for k, v in meta.items() if k not in ("rubric", "coverage", "ingest_errors")},
+           "coverage": stats_coverage, "ingest_errors": meta.get("ingest_errors", []),
+           "dropped": [Dropped(**d) for d in rd("dropped.jsonl")], "raw_log": rd("raw_model_responses.jsonl"),
+           "price_context": None, "relative": None, "narrative": narr, "observations": obs}
+    write_reports(run, res, rubric)
+    save_or_sidestep(lambda f: build_pdf(f, res, rubric, narr, obs, {"title": meta.get("title", "Sentinel Q")}),
+                      run / "sentinelq_scorecard.pdf")
+    (run / "narrative.json").write_text(json.dumps({"holdings": narr, "observations": obs}, indent=2), encoding="utf-8")
+    print(f"[STEP 6/6 REPORT] wrote {run / 'sentinelq_report.xlsx'}")
+    print(f"[STEP 6/6 REPORT] wrote {run / 'sentinelq_scorecard.pdf'}")
+    return 0
     return 0
 
 
@@ -404,6 +482,9 @@ def main(argv: list[str]) -> int:
     xl = sub.add_parser("excel")
     xl.add_argument("run_dir")
     xl.add_argument("--rescore", action="store_true", help="recompute scores under the current rubric first (no fetch, no model)")
+    rs = sub.add_parser("rescore")
+    rs.add_argument("run_dir")
+    rs.add_argument("--no-narrate", dest="narrate", action="store_false", help="keep the prior commentary; refresh scores/evidence only (no model calls)")
     r = sub.add_parser("render")
     r.add_argument("run_dir")
     r.add_argument("--title")
@@ -416,4 +497,4 @@ def main(argv: list[str]) -> int:
         return corpus_cmd(a)
     if a.cmd == "inspect":
         return {"input": inspect_input, "news": inspect_news, "label": inspect_label, "filings": inspect_filings}[a.what](a)
-    return {"verify": verify, "render": render, "merge": merge, "excel": excel}[a.cmd](a)
+    return {"verify": verify, "render": render, "merge": merge, "excel": excel, "rescore": rescore}[a.cmd](a)
