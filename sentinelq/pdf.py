@@ -215,10 +215,11 @@ def build_pdf(path: Path, res: dict, rubric, narr: dict, observations: list[dict
     t = Table(rows, colWidths=[73.7, 73.7, W - 147.4], hAlign="CENTER")
     t.setStyle(grid([("BACKGROUND", (1, i), (1, i), C(CA_BAND_FILL[lab])) for i, (_, _, lab) in enumerate(ca["bands"], 1)]
                     + [("ROWBACKGROUNDS", (0, 1), (0, -1), [colors.white]), ("ROWBACKGROUNDS", (2, 1), (2, -1), [colors.white])]))
-    st += [t, P(f"Opportunity score ≥ {ca['opportunity_review_at']:g} triggers an event-trade review. Gate A (insolvency, pledge invocation, an "
-               "auditor resignation citing withheld information) overrides the arithmetic straight to Exit. Gate B (splits, bonuses, demergers, "
-               "mergers, rights issues, special dividends, ISIN/symbol changes) is excluded from the Risk score and quarantined for the "
-               "adjustment-factor checks instead.", NOTE), PageBreak()]
+    st += [t, P(f"Opportunity score ≥ {ca['opportunity_review_at']:g} triggers an event-trade review (a separate flag, not a second score). Gate A "
+               "(insolvency, pledge invocation, an auditor resignation citing withheld information) overrides the arithmetic straight to Exit. Gate B "
+               "(splits, bonuses, demergers, mergers, rights issues, special dividends, ISIN/symbol changes) is excluded from the score and quarantined "
+               "for the adjustment-factor checks instead. A single lower-tier source for an event (noted in the Excel appendix) means its date and "
+               "facts have not been corroborated — treat it as unconfirmed, as aggregator republish dates can lag the real event.", NOTE), PageBreak()]
 
     # ============ Scorecard table ============
     st += h1(f"Scorecard — all {n} holdings") + [P("Sorted by sentiment score (high to low), then by governance score.", SUBNOTE)]

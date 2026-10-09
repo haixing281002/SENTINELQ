@@ -55,7 +55,9 @@ TOOL = {
                 "adjustment-factor checks instead. If the supplied data shows an event-trade review was triggered (a separate flag, not "
                 "a second score - positive-direction events like dividends/buybacks combine into it, and it never changes the score or "
                 "band above), mention it as a separate, final sentence - e.g. 'Separately, the dividend and buyback flow trigger an "
-                "event-trade review; this does not affect the score above.' If there are no corporate-action events, say so plainly.")},
+                "event-trade review; this does not affect the score above.' If any driving event has 'single_lower_tier_source' true, say "
+                "so plainly (e.g. 'reported by a single lower-tier outlet, so its date is unconfirmed') - do not state its date as settled "
+                "fact. If there are no corporate-action events, say so plainly.")},
             "governance_rationale": {"type": "string", "description": (
                 "One to three short paragraphs. If penalties were applied: say which event and its date, then the arithmetic "
                 "in words using ONLY the supplied penalties ('The scoring applies -20 for the disclosed regulatory action to reach 80, "
@@ -98,7 +100,9 @@ def evidence_payload(s: StockScore, items: list[LabelledItem]) -> dict:
                    "ca_event_trade_review_triggered": s.ca_opportunity_review,
                    "ca_event_trade_review_opportunity_score": s.ca_opportunity_score if s.ca_opportunity_review else None},
         "ca_events": [{"event": e["event_type"].replace("_", " "), "date": e["date"], "headline": e["headline"], "score": e["score"],
-                      "direction": e["direction"], "severity": e["severity"], "stage": e["stage"]} for e in sorted(s.ca_events, key=lambda x: -x["score"])],
+                      "direction": e["direction"], "severity": e["severity"], "stage": e["stage"], "n_sources": e["n_sources"],
+                      "source_tier": e["max_tier"], "single_lower_tier_source": e["n_sources"] == 1 and e["max_tier"] in ("T3", "T4")}
+                     for e in sorted(s.ca_events, key=lambda x: -x["score"])],
         "ca_gate_a": [{"event": e["event_type"].replace("_", " "), "date": e["date"], "headline": e["headline"]} for e in s.ca_gate_a],
         "ca_gate_b_quarantined": [{"event": e["event_type"].replace("_", " "), "date": e["date"], "headline": e["headline"]} for e in s.ca_gate_b],
         "penalties_applied": [{"event": p["event_type"].replace("_", " "), "penalty": p["penalty"], "date": p["date"],
@@ -162,6 +166,9 @@ class TemplateNarrator:
         top = sorted(s.ca_events, key=lambda e: -e["score"])[:2]
         if top:
             parts.append("Driven by " + "; ".join(f"{e['event_type'].replace('_', ' ')} ({e['date']})" for e in top) + ".")
+            weak = [e for e in top if e["n_sources"] == 1 and e["max_tier"] in ("T3", "T4")]
+            if weak:
+                parts.append("Reported by a single lower-tier source (" + ", ".join(e["event_type"].replace("_", " ") for e in weak) + "); treat the date as unconfirmed.")
         if s.ca_gate_a:
             parts.append("Gate A override: " + ", ".join(e["event_type"].replace("_", " ") for e in s.ca_gate_a) + " forces the Exit band.")
         if s.ca_gate_b:

@@ -502,7 +502,9 @@ def ca_event_score(li: LabelledItem, r: Rubric, as_of: date) -> dict | None:
     return {"event_type": et, "severity": sev, "stage": stage, "stage_mult": stage_mult, "timing_mult": round(timing_mult, 3),
             "timing_basis": timing_basis, "size_mult": size_mult, "size_basis": size_basis, "raw": round(raw, 2), "score": score,
             "direction": direction, "gate_a": gate_a, "gate_b": gate_b, "tracked_only": tracked_only,
-            "date": li.item.published, "headline": li.item.title, "url": li.item.url, "rationale": li.label.rationale}
+            "date": li.item.published, "headline": li.item.title, "url": li.item.url, "rationale": li.label.rationale,
+            "source": li.item.source, "n_sources": li.item.n_sources, "max_tier": li.item.max_tier,
+            "confidence": round(li.item.confidence, 2) if li.item.confidence is not None else None}
 
 
 def ca_combine(event_scores: list[float]) -> float:
