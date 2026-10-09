@@ -12,6 +12,9 @@ Run Info), `scores.json`, `evidence.json`, `dropped.jsonl`, `raw_model_responses
 
 **Rebuild the PDF without re-running anything (e.g. after you edit commentary):** edit `runs/<date>/narrative.json`, then
 `python -m sentinelq render runs/<date>`.
+**Rubric or scoring code changed, evidence/labels didn't:** `python -m sentinelq rescore runs/<date>` - recomputes all
+three scores from the saved labels (no fetch, no relabel), refreshes commentary, rewrites both files. See the
+`sentinelq-report` skill for the full write-up (gotchas, when to use this vs a full run).
 **Manually verify:** `audit/RUN_RECORD.md` (readable record of Steps 1-6), `audit/manifest.json` (sha256 of every output), `verify` for the numbers.
 
 ## Lessons (this step learns)
