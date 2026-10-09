@@ -539,7 +539,8 @@ class Pipeline:
                     continue
                 it, lab = li.item, li.label
                 gate = {k: getattr(lab, k) for k in ("subject", "occurred_at_company", "action_stage", "severity", "amount_inr_cr",
-                                                    "people_direction", "role_tier", "event_key", "substance", "gist")}
+                                                    "people_direction", "role_tier", "event_key", "substance", "gist",
+                                                    "ca_stage", "ca_size_pct", "ca_days_to_effective")}
                 events.append({"event_id": it.event_id or url_hash(it.url), "symbol": it.symbol, "event_date": it.event_date or it.published,
                                "pass": it.pass_ or ("verified" if it.verified else "sentiment"), "n_sources": it.n_sources, "n_members": it.n_members,
                                "max_tier": it.max_tier or tier_of(domain_of(it.url, it.source)), "representative_url": it.url,

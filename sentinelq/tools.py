@@ -118,7 +118,8 @@ def _row_to_item(r: dict) -> LabelledItem:
     lab = Label(r["event_type"], r["sentiment"], r.get("rationale", ""), bool(r["governance_flag"]), r.get("materiality"), bool(r.get("historical")),
                 subject=r.get("subject"), occurred_at_company=r.get("occurred_at_company"), action_stage=r.get("action_stage"),
                 severity=r.get("severity"), amount_inr_cr=r.get("amount_inr_cr"), people_direction=r.get("people_direction"),
-                role_tier=r.get("role_tier"), event_key=r.get("event_key"), substance=r.get("substance") or "primary", gist=r.get("gist") or "")
+                role_tier=r.get("role_tier"), event_key=r.get("event_key"), substance=r.get("substance") or "primary", gist=r.get("gist") or "",
+                ca_stage=r.get("ca_stage"), ca_size_pct=r.get("ca_size_pct"), ca_days_to_effective=r.get("ca_days_to_effective"))
     return LabelledItem(it, lab)
 
 
