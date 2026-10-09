@@ -719,6 +719,7 @@ def score_portfolio(holdings: list[Holding], by_symbol: dict[str, list[LabelledI
             sentiment_raw_mean=None if raw_mean is None else round(raw_mean, 3), sentiment_raw_score=to_band_raw(raw_mean, r),
             sentiment_weighted_mean=None if cs is None else round(cs, 3), sentiment_weighted_score=to_band_raw(cs, r),
             ca_risk_score=ca["risk_score"], ca_opportunity_score=ca["opportunity_score"], ca_risk_band=ca["band"],
+            ca_opportunity_review=ca["opportunity_review"],
             ca_gate_a=ca["gate_a"], ca_gate_b=ca["gate_b"], ca_events=ca["events"], ca_tracked_not_scored=ca["tracked"]))
     return out
 

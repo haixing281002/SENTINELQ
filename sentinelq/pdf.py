@@ -153,8 +153,8 @@ def build_pdf(path: Path, res: dict, rubric, narr: dict, observations: list[dict
         + rl("<b>Clean</b> (≥ 95), <b>Watch</b> (80–94), <b>Flag</b> (below 80)").replace("&lt;b&gt;", "<b>") .replace("&lt;/b&gt;", "</b>")
         + rl(". Flag names are highlighted in red on the summary table and warrant IC-level scrutiny before additional risk is added. The rubric is applied mechanically so the same event produces the same penalty across all holdings."), BODY)]
     st += [P("Corporate Actions score", H2), Paragraph(
-        rl("Corporate Actions is scored separately on its own 0–10 scale: each event's severity (how dangerous that event type is) is multiplied by how advanced it is, how close or recent it is, and how large this instance is, capped at 10. Negative and unclear-direction events combine into a ")
-        + "<b>Risk</b>" + rl(" score; positive-direction events combine into an ") + "<b>Opportunity</b>" + rl(" score — never summed or averaged, so one severe event is never diluted by several mild ones. Risk bands to an action: Log, Watch, Review, Act or Exit (see rubric on next page). An event that is also sentiment-relevant (e.g. an auditor resignation) feeds both scores from the same article — nothing is walled off to one score only."), BODY),
+        rl("Corporate Actions is ONE score on its own 0–10 scale: each event's severity (how dangerous that event type is) is multiplied by how advanced it is, how close or recent it is, and how large this instance is, capped at 10. Negative and unclear-direction events combine as the chance at least one bites — never summed or averaged, so one severe event is never diluted by several mild ones — and band to an action: Log, Watch, Review, Act or Exit (see rubric on next page). Positive-direction events (dividends, buybacks, clean mergers) are combined the same way into a separate ")
+        + "<b>event-trade review</b>" + rl(" trigger, not a second score: a high reading there (≥ 6) flags the stock for a different kind of review — tender into a buyback, hold through an open offer — and never softens or offsets the Corporate Actions score above. Good news never cancels bad news. An event that is also sentiment-relevant (e.g. an auditor resignation) still feeds Sentiment, Governance and Corporate Actions from the same article — nothing is walled off to one score only."), BODY),
            P("Every score in this report can be traced back to specific, dated, sourced news in the appendix. Where retrieval coverage is thin, this is stated explicitly in the rationale.", NOTE)]
     retr = res["run"].get("retrieval") or {}
     if retr.get("mode") == "live_index_backdated":       # Reconciliation fix 1: never present a backdated live search as a backtest
@@ -206,7 +206,7 @@ def build_pdf(path: Path, res: dict, rubric, narr: dict, observations: list[dict
     t = Table(rows, colWidths=[36.9, 180.0, W - 216.9], hAlign="CENTER")
     t.setStyle(grid())
     st += [t, Spacer(1, 16), P("Corporate Actions bands", H2)]
-    rows = [[P("Risk score", HDR), P("Band", HDR), P("Default action", HDR)]]
+    rows = [[P("Score", HDR), P("Band", HDR), P("Default action", HDR)]]
     act = {"Log": "Nothing.", "Watch": "Add to watchlist; no trading restriction.", "Review": "Block new buys; review before the next rebalance.",
            "Act": "Trim, hedge, or write down why you are holding; exclude from factor scoring until resolved.",
            "Exit": "Exit by default; holding requires explicit sign-off."}
@@ -259,7 +259,7 @@ def build_pdf(path: Path, res: dict, rubric, narr: dict, observations: list[dict
         lab = "FLAG" if s.governance_label == "Flag" else s.governance_label
         sc_col = SENT_TEXT.get(s.company_sentiment, AMBER)
         ca_seg = (f'<font color="{MUTED}"> · </font><font color="{CA_BAND_TEXT.get(s.ca_risk_band, AMBER)}">'
-                  f'{rl(f"CA Risk {s.ca_risk_score:.1f} ({s.ca_risk_band})")}</font>') if (s.ca_events or s.ca_gate_a) else ""
+                  f'{rl(f"Corporate Actions {s.ca_risk_score:.1f} ({s.ca_risk_band})")}</font>') if (s.ca_events or s.ca_gate_a) else ""
         line = Paragraph(f'<font color="{sc_col}">{rl("Sentiment " + sent_txt(s.company_sentiment))}</font>'
                          f'<font color="{MUTED}"> · </font>'
                          f'<font color="{LABEL_TEXT[s.governance_label]}">{rl(f"Governance {s.governance_score:g} ({lab})")}</font>' + ca_seg, SCORE)

@@ -46,14 +46,16 @@ TOOL = {
                 "events that moved the score most - lead with those.")},
             "ca_rationale": {"type": "string", "description": (
                 "One to two short paragraphs on Corporate Actions, SEPARATE from sentiment and governance even where an event also "
-                "appears there. State the supplied Risk score and band, and the Opportunity score, verbatim (e.g. 'Corporate Actions "
-                "Risk is 4.9 of 10 (Watch); Opportunity is 1.1.'). Name the one or two events that drove the Risk score, each with its "
-                "severity x stage x timing x size arithmetic in one short clause, not the raw numbers formula - describe it in words "
-                "(e.g. 'a promoter pledge created in March, board-approved and already material in size, is the main driver'). If Gate A "
-                "fired (forced Exit), say which event and that the usual arithmetic was overridden. If Gate B items were quarantined "
-                "(splits, bonuses, mergers, rights issues, special dividends, name/ISIN changes), name them and say they are excluded "
-                "from the Risk score and held for the adjustment-factor checks instead. If there are no corporate-action events, say so "
-                "plainly.")},
+                "appears there. Corporate Actions is ONE score (0-10) and band - state it verbatim (e.g. 'Corporate Actions is 4.9 of "
+                "10 (Watch).'). Name the one or two events that drove it, each with its severity x stage x timing x size arithmetic in "
+                "one short clause, not the raw numbers formula - describe it in words (e.g. 'a promoter pledge created in March, "
+                "board-approved and already material in size, is the main driver'). If Gate A fired (forced Exit), say which event and "
+                "that the usual arithmetic was overridden. If Gate B items were quarantined (splits, bonuses, mergers, rights issues, "
+                "special dividends, name/ISIN changes), name them and say they are excluded from the score and held for the "
+                "adjustment-factor checks instead. If the supplied data shows an event-trade review was triggered (a separate flag, not "
+                "a second score - positive-direction events like dividends/buybacks combine into it, and it never changes the score or "
+                "band above), mention it as a separate, final sentence - e.g. 'Separately, the dividend and buyback flow trigger an "
+                "event-trade review; this does not affect the score above.' If there are no corporate-action events, say so plainly.")},
             "governance_rationale": {"type": "string", "description": (
                 "One to three short paragraphs. If penalties were applied: say which event and its date, then the arithmetic "
                 "in words using ONLY the supplied penalties ('The scoring applies -20 for the disclosed regulatory action to reach 80, "
@@ -92,7 +94,9 @@ def evidence_payload(s: StockScore, items: list[LabelledItem]) -> dict:
                    "sentiment_weighted_mean": s.sentiment_weighted_mean, "sentiment_raw": s.sentiment_raw_score,
                    "sentiment_raw_mean": s.sentiment_raw_mean, "governance": int(round(s.governance_score)),
                    "governance_label": s.governance_label.upper() if s.governance_label == "Flag" else s.governance_label,
-                   "ca_risk": s.ca_risk_score, "ca_risk_band": s.ca_risk_band, "ca_opportunity": s.ca_opportunity_score},
+                   "ca_score": s.ca_risk_score, "ca_band": s.ca_risk_band,
+                   "ca_event_trade_review_triggered": s.ca_opportunity_review,
+                   "ca_event_trade_review_opportunity_score": s.ca_opportunity_score if s.ca_opportunity_review else None},
         "ca_events": [{"event": e["event_type"].replace("_", " "), "date": e["date"], "headline": e["headline"], "score": e["score"],
                       "direction": e["direction"], "severity": e["severity"], "stage": e["stage"]} for e in sorted(s.ca_events, key=lambda x: -x["score"])],
         "ca_gate_a": [{"event": e["event_type"].replace("_", " "), "date": e["date"], "headline": e["headline"]} for e in s.ca_gate_a],
@@ -154,14 +158,16 @@ class TemplateNarrator:
     def _ca_fallback(s):
         if not s.ca_events and not s.ca_gate_a and not s.ca_gate_b:
             return "No corporate-action events scored in the lookback."
-        parts = [f"Corporate Actions Risk is {s.ca_risk_score:.1f} of 10 ({s.ca_risk_band}); Opportunity is {s.ca_opportunity_score:.1f}."]
+        parts = [f"Corporate Actions is {s.ca_risk_score:.1f} of 10 ({s.ca_risk_band})."]
         top = sorted(s.ca_events, key=lambda e: -e["score"])[:2]
         if top:
             parts.append("Driven by " + "; ".join(f"{e['event_type'].replace('_', ' ')} ({e['date']})" for e in top) + ".")
         if s.ca_gate_a:
             parts.append("Gate A override: " + ", ".join(e["event_type"].replace("_", " ") for e in s.ca_gate_a) + " forces the Exit band.")
         if s.ca_gate_b:
-            parts.append(f"{len(s.ca_gate_b)} event(s) data-quarantined and excluded from the Risk score.")
+            parts.append(f"{len(s.ca_gate_b)} event(s) data-quarantined and excluded from the score.")
+        if s.ca_opportunity_review:
+            parts.append(f"Separately, an event-trade review is triggered (Opportunity {s.ca_opportunity_score:.1f}/10); this does not change the score or band above.")
         return " ".join(parts)
 
     def portfolio(self, facts):

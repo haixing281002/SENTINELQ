@@ -159,7 +159,10 @@ class StockScore:
     # --- Corporate Actions v2 ---
     ca_risk_score: float | None = None          # 0..10, combined from negative/unclear-direction events
     ca_opportunity_score: float | None = None   # 0..10, combined from positive-direction events
-    ca_risk_band: str = ""                      # Log | Watch | Review | Act | Exit
+    ca_risk_band: str = ""                      # Log | Watch | Review | Act | Exit - THE Corporate Actions score+band (the rules doc:
+                                                 # "When both scores are high, the Risk band governs")
+    ca_opportunity_review: bool = False         # Opportunity >= rubric threshold: a trigger for a separate event-trade review, not a
+                                                 # second score - it never changes ca_risk_score or ca_risk_band
     ca_gate_a: list = field(default_factory=list)   # hard-override events that forced Exit regardless of the arithmetic
     ca_gate_b: list = field(default_factory=list)   # data-quarantine events, excluded from the Risk score
     ca_events: list = field(default_factory=list)   # every scored CA event: type, severity, stage, timing, size, event_score, direction
