@@ -80,15 +80,16 @@ def write_reports(out: Path, res: dict, rubric) -> None:
     wname = {i: f"W{i} ({lo}-{hi}d)" for i, (lo, hi, _) in enumerate(SAMPLE_WINDOWS, 1)}
     arts = {sym: [li for li in v if li.item.kind == "news"] for sym, v in kept.items()}
 
-    from .score import driver_line, drivers
-    b_ = rubric["sentiment"].get("bands") or {"plus2": 55, "plus1": 20}
-    band_txt = {2: f"+{b_['plus2']} or more", 1: f"+{b_['plus1']} to +{b_['plus2'] - 1}", 0: f"-{b_['plus1'] - 1} to +{b_['plus1'] - 1}",
-                -1: f"-{b_['plus2'] - 1} to -{b_['plus1']}", -2: f"-{b_['plus2']} or less"}
+    from .score import driver_line, drivers, raw_sentiment_mean, is_sentiment_evidence
+    c_ = rubric["sentiment"].get("band_cutoffs") or {"plus2_at": 1.6, "plus1_at": 0.5, "minus1_at": -0.5, "minus2_at": -1.6}
+    band_txt = {2: f">= {c_['plus2_at']:g}", 1: f"{c_['plus1_at']:g} to {c_['plus2_at'] - 0.01:g}",
+                0: f"{c_['minus1_at'] + 0.01:g} to {c_['plus1_at'] - 0.01:g}",
+                -1: f"{c_['minus2_at'] + 0.01:g} to {c_['minus1_at']:g}", -2: f"<= {c_['minus2_at']:g}"}
     narr = res.get("narrative") or {}
-    heads = ["Symbol", "Company", "Sentiment (-2..+2)", "Governance Score", "Governance Label", "In one line", "Sentiment - why",
-             "Main positives", "Main negatives", "Governance - why", "Net evidence (-100..+100)", "Cap", "Sector", "Weight",
-             "Sector Sentiment (-2..+2)", "Corporate Action Score", "Articles scored", "Full text read",
-             "Articles by window (W1 / W2 / W3 / W4)", "Low Confidence"]
+    heads = ["Symbol", "Company", "Sentiment - Weighted (-2..+2)", "Sentiment - Raw (-2..+2)", "Governance Score", "Governance Label",
+             "CA Risk (0-10)", "CA Risk Band", "CA Opportunity (0-10)", "In one line", "Sentiment - why", "Main positives", "Main negatives",
+             "Governance - why", "Corporate Actions - why", "Cap", "Sector", "Weight", "Sector Sentiment (-2..+2)", "Articles scored",
+             "Full text read", "Articles by window (W1 / W2 / W3 / W4)", "Low Confidence"]
     rows = []
     for s_ in scores:
         a_ = arts.get(s_.symbol, [])
@@ -98,8 +99,10 @@ def write_reports(out: Path, res: dict, rubric) -> None:
             swhy = "Not scored - " + (s_.sentiment_note.replace("INSUFFICIENT DATA: ", "") or "insufficient evidence")
         else:
             n_zero = sum(1 for li in kept.get(s_.symbol, []) if treat.get(id(li), {}).get("counted") == "yes" and li.label.sentiment == 0)
-            swhy = (f"Average {f_['points']:+d} falls in the {s_.company_sentiment:+d} band ({band_txt[s_.company_sentiment]}). "
-                    f"{f_['n_pos']} positive, {n_zero} neutral, {f_['n_neg']} negative articles; last 3 months carry {f_['recent']:.0%} of the weight.")
+            swhy = (f"Weighted mean {f_['mean']:+.2f} falls in the {s_.company_sentiment:+d} band ({band_txt[s_.company_sentiment]}). "
+                    f"{f_['n_pos']} positive, {n_zero} neutral, {f_['n_neg']} negative articles; last 3 months carry {f_['recent']:.0%} of the weight. "
+                    + (f"Raw (unweighted) mean of the same articles: {s_.sentiment_raw_mean:+.2f} -> {s_.sentiment_raw_score:+d}."
+                       if s_.sentiment_raw_mean is not None else "Raw mean: not enough counted articles."))
         pens = s_.governance_penalties
         if pens:
             gwhy = "\n".join(f"{p_['penalty']:+g} {p_['event_type'].replace('_', ' ')} ({p_['date']}): {p_['headline'][:70]}" for p_ in pens)
@@ -107,50 +110,77 @@ def write_reports(out: Path, res: dict, rubric) -> None:
             gwhy = "No penalised governance event in the 12 months."
         if s_.governance_ignored:
             gwhy += f"\n{len(s_.governance_ignored)} flagged item(s) checked and not penalised - see Evidence - Governance."
-        rows.append([s_.symbol, s_.name, s_.company_sentiment, s_.governance_score, s_.governance_label,
+        if s_.ca_events or s_.ca_gate_a or s_.ca_gate_b:
+            cawhy = (f"Risk {s_.ca_risk_score:.1f}/10 ({s_.ca_risk_band}), Opportunity {s_.ca_opportunity_score:.1f}/10.\n"
+                     + "\n".join(f"{e['event_type'].replace('_', ' ')} {e['score']:.1f} ({e['direction']}, {e['date']}): {e['headline'][:65]}"
+                                for e in sorted(s_.ca_events, key=lambda x: -x["score"])[:5]))
+            if s_.ca_gate_a:
+                cawhy += "\nGATE A: forced to Exit - " + ", ".join(e["event_type"] for e in s_.ca_gate_a) + "."
+            if s_.ca_gate_b:
+                cawhy += f"\n{len(s_.ca_gate_b)} event(s) data-quarantined (excluded from Risk) - see Corporate Actions - Events."
+        else:
+            cawhy = "No corporate-action events scored in the 12 months."
+        rows.append([s_.symbol, s_.name, s_.company_sentiment, s_.sentiment_raw_score, s_.governance_score, s_.governance_label,
+                     s_.ca_risk_score, s_.ca_risk_band, s_.ca_opportunity_score,
                      (narr.get(s_.symbol) or {}).get("one_line_read") or _gist_line(pos, neg), swhy,
                      "\n".join(driver_line(li, p) for li, p in pos[:3]) or "none", "\n".join(driver_line(li, p) for li, p in neg[:3]) or "none",
-                     gwhy, s_.sentiment_points, s_.cap, s_.sector, s_.weight, s_.sector_sentiment, round(s_.corporate_action_score), len(a_),
+                     gwhy, cawhy, s_.cap, s_.sector, s_.weight, s_.sector_sentiment, len(a_),
                      sum(1 for li in a_ if (li.item.parse or "").startswith("full-text")), " / ".join(str(x) for x in wc),
                      "YES" if s_.low_confidence else ""])
-    ws = _sheet(wb, "Scorecard", heads, rows, widths={"Company": 22, "Sentiment (-2..+2)": 11, "Governance Score": 11, "Governance Label": 11,
-                                                      "In one line": 26, "Sentiment - why": 42, "Main positives": 66, "Main negatives": 66,
-                                                      "Governance - why": 48, "Articles by window (W1 / W2 / W3 / W4)": 18})
+    ws = _sheet(wb, "Scorecard", heads, rows, widths={"Company": 22, "Sentiment - Weighted (-2..+2)": 13, "Sentiment - Raw (-2..+2)": 11,
+                                                      "Governance Score": 11, "Governance Label": 11, "CA Risk (0-10)": 11, "CA Risk Band": 11,
+                                                      "CA Opportunity (0-10)": 11, "In one line": 26, "Sentiment - why": 42, "Main positives": 66,
+                                                      "Main negatives": 66, "Governance - why": 48, "Corporate Actions - why": 48,
+                                                      "Articles by window (W1 / W2 / W3 / W4)": 18})
     ws.freeze_panes = "C2"
     ws.row_dimensions[1].height = 32
     sfill = {2: "C6EFCE", 1: "E2F0D9", 0: "FFFFFF", -1: "FCE4D6", -2: "FFC7CE"}
+    CA_BAND_FILLS = {"Exit": "FFC7CE", "Act": "FCE4D6", "Review": "FFEB9C", "Watch": "E2F0D9", "Log": "FFFFFF"}
     for c in ws[1]:
         c.alignment = Alignment(wrap_text=True, vertical="center")
     for row in ws.iter_rows(min_row=2):
         ws.row_dimensions[row[0].row].height = 62
         for c in row:
             c.alignment = Alignment(wrap_text=True, vertical="top")
-        row[2].fill = PatternFill("solid", fgColor=sfill.get(row[2].value, "FFFFFF"))
-        row[4].fill = PatternFill("solid", fgColor=FILLS.get(row[4].value, "FFFFFF"))
-        for c in (0, 2, 3, 4, 5):
+        row[2].fill = PatternFill("solid", fgColor=sfill.get(row[2].value, "FFFFFF"))      # Sentiment - Weighted
+        row[3].fill = PatternFill("solid", fgColor=sfill.get(row[3].value, "FFFFFF"))      # Sentiment - Raw
+        row[5].fill = PatternFill("solid", fgColor=FILLS.get(row[5].value, "FFFFFF"))      # Governance Label
+        row[7].fill = PatternFill("solid", fgColor=CA_BAND_FILLS.get(row[7].value, "FFFFFF"))  # CA Risk Band
+        for c in (0, 2, 3, 5, 7, 9):
             row[c].font = Font(bold=True)
-        for c in (2, 3, 4):
+        for c in (2, 3, 4, 5, 6, 7, 8):
             row[c].alignment = Alignment(horizontal="center", vertical="top")
 
     rm = wb.create_sheet("Read me", 0)
     guide = [("How to read the Scorecard", ""),
-             ("Layout", "Left to right: the scores, a one-line read, WHY (sentiment, the articles that moved it most, governance), then the detail."),
+             ("Layout", "Left to right: the scores (Sentiment, Governance, Corporate Actions), a one-line read, WHY for each, then the detail."),
+             ("One article, several buckets", "An article can count in Sentiment AND Corporate Actions AND Governance at once - e.g. an auditor "
+                                              "resignation is bad sentiment news, a Corporate-Action severity event, and a governance penalty, all from "
+                                              "the same article. Nothing is walled off to a single bucket."),
              ("In one line", "A short plain-English read of the stock's news year (from the IC commentary)."),
-             ("Sentiment (-2..+2)", "The stock's news score. Every article about the company in the 12-month sample is read and scored -2..+2."),
-             ("Net evidence (-100..+100)", "The weighted average of those article scores x 50. Weights: W1 (0-30 days) 1.0, W2 (31-90) 0.75, "
-                                           "W3 (91-180) 0.5, W4 (181-365) 0.25. Neutral (0) articles count and pull toward 0. It decides the band below."),
-             ("Bands", f"+2: {band_txt[2]}   |   +1: {band_txt[1]}   |   0: {band_txt[0]}   |   -1: {band_txt[-1]}   |   -2: {band_txt[-2]}"),
-             ("Sentiment - why", "Which band the net falls in, how many events pushed up vs down, and how much of the weight is recent. "
-                                "Every article about the company is read and scored; a neutral (0) routine/administrative item (e.g. a routine "
-                                "board or management change, or a generic piece with no stated impact) is shown but not counted in the average - "
-                                "it carries no sentiment information, the same as a bare share-price move."),
-             ("Main positives / negatives", "The three articles that moved the score most each way: article score | date | headline (points it added)."),
-             ("Governance Score", "Starts at 100; fixed penalties for verified adverse events (regulator orders, auditor exits, CXO exits...). "
-                                  "Penalties older than 6 months fade to half by 12 months."),
+             ("Sentiment - Weighted (-2..+2)", "The headline sentiment score. Every counted article is read and scored -2..+2; the WEIGHTED mean "
+                                               "applies a recency weight (W1 0-30d 1.0, W2 31-90d 0.75, W3 91-180d 0.5, W4 181-365d 0.25) and the "
+                                               "article's confidence. No x50 scaling - the mean is banded directly."),
+             ("Sentiment - Raw (-2..+2)", "The PLAIN average of the same articles' scores - no recency weight, no confidence. Shown side by side "
+                                          "with the weighted score so a difference between them (recent news dominating, or not) is visible at a glance."),
+             ("Bands (both raw and weighted)", f"+2: {band_txt[2]}   |   +1: {band_txt[1]}   |   0: {band_txt[0]}   |   -1: {band_txt[-1]}   |   -2: {band_txt[-2]}"
+                                               f"  (so a mean of 1.2 stays +1; it takes {c_['plus2_at']:g}+ to reach +2)."),
+             ("Sentiment - why", "Which band the weighted mean falls in, how many events pushed up vs down, how much of the weight is recent, and the "
+                                "raw mean alongside it. A neutral (0) routine/administrative item (e.g. a routine board/management change, or a generic "
+                                "piece with no stated impact) is shown but not counted in either average - it carries no sentiment information, the same "
+                                "as a bare share-price move."),
+             ("Main positives / negatives", "The three articles that moved the WEIGHTED score most each way: article score | date | headline (its push)."),
+             ("Governance Score", "Starts at 100; fixed penalties for verified adverse events (regulator orders, auditor exits, CXO exits, pledge "
+                                  "invocation...). Penalties older than 6 months fade to half by 12 months."),
              ("Governance Label", "Clean 95+  |  Watch 80-94  |  Flag below 80. Thresholds unchanged."),
              ("Governance - why", "Each penalty applied, with date and headline; items checked but not penalised are listed in 'Evidence - Governance'."),
+             ("CA Risk / CA Risk Band / CA Opportunity", "Corporate Actions, scored severity x stage x timing x size (0-10 per event), combined "
+                                                         "separately for Risk (negative/unclear events) and Opportunity (positive events) as the chance "
+                                                         "at least one bites - never summed or averaged. Band: Log 0-2.9, Watch 3-4.9, Review 5-6.9, "
+                                                         "Act 7-8.9, Exit 9-10. Full detail, including gated and tracked-only events, in the Corporate "
+                                                         "Actions sheets."),
              ("Articles by window", "Articles scored in W1 0-30 days / W2 31-90 / W3 91-180 / W4 181-365. Every usable article is scored "
-                                    "(no budget cap); the window only sets its weight."),
+                                    "(no budget cap); the window only sets its recency weight."),
              ("", ""),
              ("Other sheets", ""),
              ("Articles by window", "Every sampled article: what it says, its score and why, and what it did to the stock's score (filter by Symbol / Window). "
@@ -159,8 +189,12 @@ def write_reports(out: Path, res: dict, rubric) -> None:
                                    "story from another outlet or in other words - listed so the merge can be checked; scored once on the row it names). "
                                    "Every article the search found is a row here, including ones never sent to the model (headline didn't name the "
                                    "company, templated pattern, outside the lookback) - 'How it was treated' gives the exact reason for every one."),
-             ("Window summary", "Per stock and window: articles scored, sampled-but-not-scored, the +2..-2 counts and the points each window added."),
-             ("Evidence - Governance", "Every governance item: penalty applied, or why it was not penalised.")]
+             ("Window summary", "Per stock and window: articles scored, sampled-but-not-scored, the +2..-2 counts and the weighted push each window added."),
+             ("Evidence - Governance", "Every governance item: penalty applied, or why it was not penalised."),
+             ("Corporate Actions", "One row per stock: Risk score, band, Opportunity score, whether Gate A (hard override to Exit) or Gate B (data "
+                                   "quarantine) fired, and how many events were scored vs tracked-only."),
+             ("Corporate Actions - Events", "Every scored, gated and tracked-only corporate-action event: severity, stage, timing and size multipliers, "
+                                            "the combined event score (0-10), its direction, and which gate (if any) it triggered.")]
     for r_ in guide:
         rm.append(list(r_))
     rm.column_dimensions["A"].width = 28
@@ -280,11 +314,35 @@ def write_reports(out: Path, res: dict, rubric) -> None:
     _sheet(wb, "Evidence - Governance", ["Symbol", "Date", "Headline", "Event Type", "Penalty", "Treatment", "Source URL", "Verification record",
                                          "n_sources", "max_tier", "Confidence"], gov, link_col=6, widths={**W, "Treatment": 55, "Verification record": 70})
 
-    ca = [[s.symbol, d["date"], d["headline"], d["event_type"], d["materiality"], d["contribution"], d["url"]]
-          for s in scores for d in s.corporate_action_detail]
-    _sheet(wb, "Evidence - Corp Actions",
-           ["Symbol", "Date", "Headline", "Event Type", "Materiality", "Contribution", "Source URL"],
-           ca, link_col=6, widths=W)
+    # Corporate Actions v2: one summary row per stock (Risk/Opportunity/band/gates), then every event behind it
+    ca_summary = [[s.symbol, s.name, s.ca_risk_score, s.ca_risk_band, s.ca_opportunity_score,
+                  "YES - event-trade review" if (s.ca_opportunity_score or 0) >= rubric["corporate_actions"]["opportunity_review_at"] else "",
+                  "; ".join(e["event_type"] for e in s.ca_gate_a) or "", "; ".join(e["event_type"] for e in s.ca_gate_b) or "",
+                  len(s.ca_events), len(s.ca_tracked_not_scored)] for s in scores]
+    cs_ws = _sheet(wb, "Corporate Actions", ["Symbol", "Company", "Risk score (0-10)", "Band", "Opportunity score (0-10)",
+                   "Opportunity review", "Gate A - hard Exit", "Gate B - data quarantine", "Scored events", "Tracked (not scored)"],
+                   ca_summary, widths={"Company": 22, "Gate A - hard Exit": 24, "Gate B - data quarantine": 28})
+    band_fill = {"Exit": "FFC7CE", "Act": "FCE4D6", "Review": "FFEB9C", "Watch": "E2F0D9", "Log": "FFFFFF"}
+    for row in cs_ws.iter_rows(min_row=2):
+        row[3].fill = PatternFill("solid", fgColor=band_fill.get(row[3].value, "FFFFFF"))
+        row[3].font = Font(bold=True)
+
+    ca_rows = []
+    for s in scores:
+        for e in s.ca_events:
+            ca_rows.append([s.symbol, s.name, e["date"], e["headline"], e["event_type"], e["severity"], e["stage"], e["stage_mult"],
+                            e["timing_mult"], e["timing_basis"], e["size_mult"], e["size_basis"], e["score"], e["direction"],
+                            "Gate A - forces Exit" if e["gate_a"] else "", e["rationale"], e["url"]])
+        for e in s.ca_tracked_not_scored:
+            ca_rows.append([s.symbol, s.name, e["date"], e["headline"], e["event_type"], e["severity"], "", "", "", "",
+                            "", "", "", e["direction"], "tracked on the calendar only - not a formal corporate action (see rules doc)",
+                            e["rationale"], e["url"]])
+        for e in s.ca_gate_b:
+            ca_rows.append([s.symbol, s.name, e["date"], e["headline"], e["event_type"], e["severity"], "", "", "", "",
+                            "", "", "", e["direction"], "Gate B - data quarantine: excluded from the Risk score", e["rationale"], e["url"]])
+    _sheet(wb, "Corporate Actions - Events", ["Symbol", "Company", "Date", "Headline", "Event type", "Severity (0-10)", "Stage",
+           "Stage x", "Timing x", "Timing basis", "Size x", "Size basis", "Event score (0-10)", "Direction", "Gate", "Why", "Source URL"],
+           ca_rows, link_col=16, widths={"Company": 22, "Headline": 60, "Why": 55, "Timing basis": 20, "Size basis": 22, "Gate": 28})
 
     cmap = {s.symbol: s for s in scores}
     cov = [[c["symbol"], c["retrieved"], c["news_kept"], c["actions_kept"], c["kept"], c["dropped"], c["label_failed"],

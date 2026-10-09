@@ -1,5 +1,5 @@
 {
-  "version": "1.9.1",
+  "version": "2.0.0",
   "_note": "Single source of truth for every weight, penalty and taxonomy entry. Scores change only if this file changes. Values marked 'assumed' were not stated in the architecture document and should be confirmed by the committee.",
   "event_types": [
     "earnings_beat",
@@ -31,7 +31,22 @@
     "price_move",
     "mnc_structural_discount",
     "other",
-    "pledge"
+    "pledge",
+    "insolvency_admission",
+    "demerger",
+    "open_offer_takeover",
+    "rights_issue",
+    "pledge_invocation",
+    "special_dividend",
+    "lock_in_expiry",
+    "name_symbol_isin_change",
+    "fy_end_change",
+    "routine_agm_egm",
+    "admin_notice",
+    "noise_notice",
+    "index_inclusion",
+    "index_exclusion",
+    "exchange_surveillance"
   ],
   "sentiment_range": [
     -2,
@@ -68,11 +83,39 @@
     "results_dominance_threshold": -0.5,
     "recency_floor": 0.15,
     "points_scale": 50,
-    "bands": {"plus2": 50, "plus1": 15},
-    "window_weights": [[30, 1.0], [90, 0.75], [180, 0.5], [365, 0.25]],
+    "bands": {
+      "plus2": 50,
+      "plus1": 15
+    },
+    "window_weights": [
+      [
+        30,
+        1.0
+      ],
+      [
+        90,
+        0.75
+      ],
+      [
+        180,
+        0.5
+      ],
+      [
+        365,
+        0.25
+      ]
+    ],
     "use_source_confidence": false,
     "simple_note": "v1.9.0 (simple and checkable by hand): stock sentiment = weighted average of the -2..+2 scores of EVERY article about the company (0s included), weight by window only - W1 0-30d 1.0, W2 31-90d 0.75, W3 91-180d 0.5, W4 181-365d 0.25; no source-confidence factor. Shown as points = average x 50 (-100..+100). Bands: >= +50 -> +2, +15..+49 -> +1, -14..+14 -> 0, -15..-49 -> -1, <= -50 -> -2. Not counted: passing mentions, share-price-only items, governance-search articles (they feed governance). window_weights replaces the half-life curve when present.",
-        "recency_note": "Weight = max(recency_floor, 0.5 ^ (age_trading_days / half_life_trading_days)). v1.7.0: half-life 90 trading days with a 0.15 floor (was 126 / 0.25, which left the last month with only ~24% of the weight). Weights by age: now 1.00, 1m 0.85, 3m 0.62, 6m 0.38, 9m 0.24, 12m 0.15 - the whole year still counts, but recent news leads. This is on top of the sampler's recency-tilted article budget."
+    "recency_note": "Weight = max(recency_floor, 0.5 ^ (age_trading_days / half_life_trading_days)). v1.7.0: half-life 90 trading days with a 0.15 floor (was 126 / 0.25, which left the last month with only ~24% of the weight). Weights by age: now 1.00, 1m 0.85, 3m 0.62, 6m 0.38, 9m 0.24, 12m 0.15 - the whole year still counts, but recent news leads. This is on top of the sampler's recency-tilted article budget.",
+    "display_scale": "raw_-2_to_2_no_x50",
+    "band_cutoffs": {
+      "plus2_at": 1.6,
+      "plus1_at": 0.5,
+      "minus1_at": -0.5,
+      "minus2_at": -1.6,
+      "_note": "v2.0.0: scores are banded directly on the -2..+2 mean (no points/x50 step). 0.5..1.59 -> +1 (e.g. mean 1.2 -> +1); >=1.6 -> +2 (needs stronger, more consistent evidence than a bare round-to-nearest would). Mirrored for -1/-2. Computed for BOTH the raw mean (plain average of every counted article's label score) and the weighted mean (recency x confidence weighted average) - shown side by side, never combined into one number."
+    }
   },
   "governance": {
     "start": 100,
@@ -90,7 +133,15 @@
       },
       "management_exit": -8,
       "board_independence": -8,
-      "mnc_structural_discount": -5
+      "mnc_structural_discount": -5,
+      "pledge_invocation": -20,
+      "pledge": {
+        "low": 0,
+        "medium": -5,
+        "high": -10
+      },
+      "insolvency_admission": -25,
+      "open_offer_takeover": 0
     },
     "penalties_assumed": [
       "exchange_fine (medium=-7 interpolated)"
@@ -148,15 +199,27 @@
       "historical": [
         "Historical (out-of-window) event",
         "Memory discount; not double-counted."
+      ],
+      "pledge_invocation": [
+        "Promoter pledge invocation",
+        "Forced selling into the market - the classic mid/small-cap stress spiral."
+      ],
+      "pledge": [
+        "Promoter pledge creation",
+        "Pledged % of promoter holding; penalised only at medium/high materiality."
+      ],
+      "insolvency_admission": [
+        "Insolvency admission (IBC) / compulsory delisting / long suspension",
+        "Can go to near zero and may not be exitable."
       ]
     },
     "label_text": {
       "Clean": [
-        "≥ 95",
+        "\u2265 95",
         "No material adverse events in the 12-month window."
       ],
       "Watch": [
-        "80–94",
+        "80\u201394",
         "One or more disclosed items warranting monitoring; not integrity-level."
       ],
       "Flag": [
@@ -165,21 +228,25 @@
       ]
     },
     "display": {
-      "auditor_restatement": "−25 / −20",
-      "regulatory_action": "−20",
-      "rpt_concern": "−12",
-      "investigation": "−10",
-      "exchange_fine": "−5 to −10",
-      "management_exit": "−8",
-      "board_independence": "−8",
-      "historical": "−5"
+      "auditor_restatement": "\u221225 / \u221220",
+      "regulatory_action": "\u221220",
+      "rpt_concern": "\u221212",
+      "investigation": "\u221210",
+      "exchange_fine": "\u22125 to \u221210",
+      "management_exit": "\u22128",
+      "board_independence": "\u22128",
+      "historical": "\u22125",
+      "pledge_invocation": "\u221220",
+      "pledge": "0 / \u22125 / \u221210",
+      "insolvency_admission": "\u221225"
     },
     "routine_types": {
       "management_change_routine": "elevation, promotion, new appointment, planned retirement/succession, or an exit below CXO tier - not penalised",
       "rpt_routine": "routine / approved / arm's-length related-party transaction - not penalised",
       "board_change_routine": "ordinary board reconstitution or appointment with no independence gap - not penalised",
       "investigation_closed": "probe concluded, quashed or cleared - not penalised (only a live probe is)",
-      "auditor_rotation": "scheduled auditor rotation / routine reappointment - not penalised"
+      "auditor_rotation": "scheduled auditor rotation / routine reappointment - not penalised",
+      "lock_in_expiry": "a scheduled lock-in expiry is a supply-overhang data point, not a governance penalty - tracked in Corporate Actions"
     },
     "pass": {
       "windows_days": [
@@ -231,31 +298,170 @@
     }
   },
   "corporate_actions": {
-    "clip": [
-      -2,
-      2
-    ],
-    "base": {
-      "dividend": 1.0,
-      "buyback": 1.5,
-      "split_bonus": 0.5,
-      "dilution": -1.5,
-      "merger_acquisition": "by_sentiment_sign"
+    "model": "severity x stage x timing x size, capped at 10 per event; Risk and Opportunity combined separately as 1 - product(1 - event_score/10) (chance at least one bites), never summed or averaged",
+    "severity": {
+      "insolvency_admission": 10,
+      "demerger": 9,
+      "merger_acquisition": 9,
+      "split_bonus": 8,
+      "open_offer_takeover": 8,
+      "rights_issue": 7,
+      "pledge": 7,
+      "pledge_invocation": 7,
+      "dilution": 6,
+      "special_dividend": 6,
+      "auditor_resignation": 6,
+      "management_exit": 6,
+      "buyback": 5,
+      "lock_in_expiry": 5,
+      "dividend": 4,
+      "name_symbol_isin_change": 3,
+      "fy_end_change": 2,
+      "routine_agm_egm": 2,
+      "admin_notice": 1,
+      "noise_notice": 0
     },
-    "materiality_multiplier": {
-      "low": 0.5,
+    "damage_type": {
+      "insolvency_admission": "both",
+      "demerger": "both",
+      "merger_acquisition": "both",
+      "split_bonus": "data",
+      "open_offer_takeover": "economic",
+      "rights_issue": "both",
+      "pledge": "economic",
+      "pledge_invocation": "economic",
+      "dilution": "both",
+      "special_dividend": "both",
+      "auditor_resignation": "economic",
+      "management_exit": "economic",
+      "buyback": "economic",
+      "lock_in_expiry": "economic",
+      "dividend": "data",
+      "name_symbol_isin_change": "data",
+      "fy_end_change": "data",
+      "routine_agm_egm": "data",
+      "admin_notice": "none",
+      "noise_notice": "none"
+    },
+    "stage_multiplier": {
+      "board_intimation": 0.3,
+      "board_approved": 0.6,
+      "approval_obtained": 0.8,
+      "completed": 1.0,
+      "_default_when_unstated": "board_approved",
+      "_note": "approval_obtained = shareholder or regulatory approval obtained; completed = record date fixed or passed"
+    },
+    "timing": {
+      "upcoming_over_60d": 0.5,
+      "upcoming_15_to_60d": 0.75,
+      "upcoming_under_15d": 1.0,
+      "past_half_life_days": {
+        "dividend": 30,
+        "buyback": 30,
+        "special_dividend": 30,
+        "merger_acquisition": 90,
+        "demerger": 90,
+        "open_offer_takeover": 90,
+        "pledge": 180,
+        "pledge_invocation": 180,
+        "auditor_resignation": 180,
+        "management_exit": 180,
+        "_default": 90
+      },
+      "_note": "ca_days_to_effective > 0 on the label -> upcoming bucket by that count; otherwise the event is past and decays by half every N days from the article's publish date (its own half-life above, else the default)."
+    },
+    "size_bands": [
+      [
+        2,
+        0.7
+      ],
+      [
+        5,
+        1.0
+      ],
+      [
+        10,
+        1.2
+      ],
+      [
+        999,
+        1.5
+      ]
+    ],
+    "size_not_applicable_multiplier": 1.0,
+    "size_fallback_from_materiality": {
+      "low": 0.7,
       "medium": 1.0,
       "high": 1.5
     },
-    "dividend_yield_materiality": {
-      "medium_at": 0.01,
-      "high_at": 0.03
+    "_size_note": "ca_size_pct on the label (dilution %, pledged % of promoter holding, rights discount %) selects the band above; if the label has no ca_size_pct, materiality (low/medium/high) stands in; if neither applies to the event type (e.g. insolvency, demerger, auditor exit), the multiplier is 1.0 (no size scaling).",
+    "direction_from_sentiment": "label.sentiment > 0 -> positive (feeds Opportunity); < 0 -> negative (feeds Risk); 0 -> unclear (feeds Risk, as the table specifies 'negative or unclear')",
+    "gate_a_hard_exit": {
+      "event_types": [
+        "insolvency_admission",
+        "pledge_invocation"
+      ],
+      "auditor_resignation_requires_severity": "integrity",
+      "_note": "Straight to the Exit band regardless of the arithmetic. An auditor_resignation only triggers Gate A when the label's severity is 'integrity' (withheld-information / irregularity resignations, not a routine/explained exit)."
     },
-    "_note": "Base values and multipliers are assumed; the document specifies only direction and materiality scaling.",
+    "gate_b_data_quarantine": {
+      "event_types": [
+        "split_bonus",
+        "demerger",
+        "merger_acquisition",
+        "rights_issue",
+        "special_dividend",
+        "name_symbol_isin_change"
+      ],
+      "_note": "These add nothing to the Risk score and are shown separately as quarantined - price/fundamentals need the adjustment-factor checks in the rules doc before model-driven signals on the stock resume."
+    },
+    "bands": [
+      [
+        0,
+        2.9,
+        "Log"
+      ],
+      [
+        3,
+        4.9,
+        "Watch"
+      ],
+      [
+        5,
+        6.9,
+        "Review"
+      ],
+      [
+        7,
+        8.9,
+        "Act"
+      ],
+      [
+        9,
+        10,
+        "Exit"
+      ]
+    ],
+    "opportunity_review_at": 6,
+    "review_queue_order": "risk_score * (position_weight / average_position_weight)",
+    "disclosure_tracked_not_scored": {
+      "event_types": [
+        "index_inclusion",
+        "index_exclusion",
+        "exchange_surveillance"
+      ],
+      "approx_severity_shown_only": {
+        "index_inclusion": 7,
+        "index_exclusion": 7,
+        "exchange_surveillance": 6
+      },
+      "_note": "Kept on the calendar and shown in the Corporate Actions sheet/section, but excluded from the Risk/Opportunity arithmetic - the rules doc treats these (and results announcements, already scored under sentiment) as disclosure events, not formal corporate actions."
+    },
+    "worked_example_check": "QIP 6x0.6x1.0x1.2=4.3; pledge 7x1.0x1.0x0.7=4.9; CFO exit 6x1.0x0.8x1.0=4.8 -> chance nothing bites 0.57x0.51x0.52=0.15 -> Risk 8.5 -> Act (matches the rules doc's worked example)",
     "dedupe": {
       "dividend_days": 120,
       "other_days": 30,
-      "note": "Repeat headlines of one declaration are ONE action (the July run counted 375 headlines incl. repeats)."
+      "note": "Repeat headlines of one declaration are ONE action (same event_type + same figures within the window)."
     }
   },
   "confidence": {
@@ -271,7 +477,7 @@
     ],
     [
       1,
-      "Positive year on balance, but with a specific offset — one weak quarter, an execution issue, or a valuation caution — that prevents the maximum score."
+      "Positive year on balance, but with a specific offset \u2014 one weak quarter, an execution issue, or a valuation caution \u2014 that prevents the maximum score."
     ],
     [
       0,
@@ -287,11 +493,26 @@
     ]
   ],
   "corporate_action_types": [
-    "dividend",
+    "admin_notice",
+    "auditor_resignation",
     "buyback",
-    "split_bonus",
+    "demerger",
     "dilution",
+    "dividend",
+    "fy_end_change",
+    "insolvency_admission",
+    "lock_in_expiry",
+    "management_exit",
     "merger_acquisition",
+    "name_symbol_isin_change",
+    "noise_notice",
+    "open_offer_takeover",
+    "pledge",
+    "pledge_invocation",
+    "rights_issue",
+    "routine_agm_egm",
+    "special_dividend",
+    "split_bonus",
     "capacity_expansion"
   ],
   "reserved_event_types": [

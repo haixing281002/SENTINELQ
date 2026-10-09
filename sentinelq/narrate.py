@@ -12,7 +12,8 @@ from typing import Protocol
 
 from .models import LabelledItem, StockScore
 
-CA_TYPES = {"dividend", "buyback", "split_bonus", "dilution", "merger_acquisition", "capacity_expansion"}
+CA_TYPES = {"dividend", "buyback", "split_bonus", "dilution", "merger_acquisition", "capacity_expansion", "special_dividend",
+            "rights_issue", "demerger", "open_offer_takeover", "lock_in_expiry", "pledge", "pledge_invocation", "insolvency_admission"}
 
 SYSTEM = (
     "You write the analyst commentary for an investment-committee scorecard (house style: plain, factual, precise, "
@@ -37,10 +38,22 @@ TOOL = {
             "sentiment_rationale": {"type": "string", "description": (
                 "Two short paragraphs separated by a blank line. Paragraph 1: the positive case with dated, sourced facts "
                 "and figures (results, guidance, broker views). Paragraph 2: the offsets or the absence of offsets in the "
-                "twelve-month window, ending with a sentence that explains why the fixed sentiment score stands, citing the supplied net "
-                "points and band (e.g. 'Net evidence is +71 of 100, inside the +2 band (>= +55): sustained beats with no counterweight.'). "
-                "Use the supplied sentiment score and points verbatim; whole numbers only, never decimals. 'why_this_score' lists the "
+                "twelve-month window, ending with a sentence that explains why the fixed sentiment score stands, citing the supplied "
+                "WEIGHTED mean and band on the -2..+2 scale (e.g. 'The weighted mean is +1.78, inside the +2 band (>= 1.6): sustained "
+                "beats with no counterweight.'), and naming the RAW (unweighted) mean alongside it if it differs meaningfully from the "
+                "weighted one (e.g. 'the raw, unweighted average of the same articles is +0.9, a milder +1 - recent news is doing the work'). "
+                "Use the supplied scores verbatim, to 2 decimal places for the means; never re-derive them. 'why_this_score' lists the "
                 "events that moved the score most - lead with those.")},
+            "ca_rationale": {"type": "string", "description": (
+                "One to two short paragraphs on Corporate Actions, SEPARATE from sentiment and governance even where an event also "
+                "appears there. State the supplied Risk score and band, and the Opportunity score, verbatim (e.g. 'Corporate Actions "
+                "Risk is 4.9 of 10 (Watch); Opportunity is 1.1.'). Name the one or two events that drove the Risk score, each with its "
+                "severity x stage x timing x size arithmetic in one short clause, not the raw numbers formula - describe it in words "
+                "(e.g. 'a promoter pledge created in March, board-approved and already material in size, is the main driver'). If Gate A "
+                "fired (forced Exit), say which event and that the usual arithmetic was overridden. If Gate B items were quarantined "
+                "(splits, bonuses, mergers, rights issues, special dividends, name/ISIN changes), name them and say they are excluded "
+                "from the Risk score and held for the adjustment-factor checks instead. If there are no corporate-action events, say so "
+                "plainly.")},
             "governance_rationale": {"type": "string", "description": (
                 "One to three short paragraphs. If penalties were applied: say which event and its date, then the arithmetic "
                 "in words using ONLY the supplied penalties ('The scoring applies -20 for the disclosed regulatory action to reach 80, "
@@ -51,7 +64,7 @@ TOOL = {
             "key_corporate_action": {"type": "string", "description": "Terse list of the key corporate actions in the evidence, e.g. 'Div Rs 46 final + Rs 20 interim' or 'Rs 5,633cr buyback @ Rs 12,000 (open 1-Jul)'. An em dash if none."},
             "coverage_note": {"type": "string", "description": "Only if coverage is thin or sources conflict AND the sentiment rationale does not already say so; otherwise return an empty string. Never repeat what the rationale states."},
         },
-        "required": ["sentiment_rationale", "governance_rationale", "one_line_read", "key_corporate_action", "coverage_note"],
+        "required": ["sentiment_rationale", "governance_rationale", "ca_rationale", "one_line_read", "key_corporate_action", "coverage_note"],
         "additionalProperties": False,
     },
 }
@@ -75,9 +88,15 @@ def evidence_payload(s: StockScore, items: list[LabelledItem]) -> dict:
         "sentiment_status": s.sentiment_note or "ok", "evidence_span": f"{s.evidence_first}..{s.evidence_last}" if s.evidence_first else "none",
         "coverage_map": s.coverage_map,
         "why_this_score": s.rationale,
-        "scores": {"sentiment": s.company_sentiment if s.company_sentiment is not None else "INSUFFICIENT DATA",
-                   "net_points_of_100": s.sentiment_points, "governance": int(round(s.governance_score)),
-                   "governance_label": s.governance_label.upper() if s.governance_label == "Flag" else s.governance_label},
+        "scores": {"sentiment_weighted": s.company_sentiment if s.company_sentiment is not None else "INSUFFICIENT DATA",
+                   "sentiment_weighted_mean": s.sentiment_weighted_mean, "sentiment_raw": s.sentiment_raw_score,
+                   "sentiment_raw_mean": s.sentiment_raw_mean, "governance": int(round(s.governance_score)),
+                   "governance_label": s.governance_label.upper() if s.governance_label == "Flag" else s.governance_label,
+                   "ca_risk": s.ca_risk_score, "ca_risk_band": s.ca_risk_band, "ca_opportunity": s.ca_opportunity_score},
+        "ca_events": [{"event": e["event_type"].replace("_", " "), "date": e["date"], "headline": e["headline"], "score": e["score"],
+                      "direction": e["direction"], "severity": e["severity"], "stage": e["stage"]} for e in sorted(s.ca_events, key=lambda x: -x["score"])],
+        "ca_gate_a": [{"event": e["event_type"].replace("_", " "), "date": e["date"], "headline": e["headline"]} for e in s.ca_gate_a],
+        "ca_gate_b_quarantined": [{"event": e["event_type"].replace("_", " "), "date": e["date"], "headline": e["headline"]} for e in s.ca_gate_b],
         "penalties_applied": [{"event": p["event_type"].replace("_", " "), "penalty": p["penalty"], "date": p["date"],
                                "headline": p["headline"]} for p in s.governance_penalties],
         "governance_start": 100,
@@ -127,8 +146,23 @@ class TemplateNarrator:
             gr = f"No penalised governance events in the lookback. Score {s.governance_score:g} ({s.governance_label})."
         return {"sentiment_rationale": " ".join(sr), "governance_rationale": gr,
                 "one_line_read": "Low-confidence coverage" if s.low_confidence else "",
+                "ca_rationale": self._ca_fallback(s),
                 "key_corporate_action": key_actions(items),
                 "coverage_note": "Sparse news retrieval; treat scores as low confidence." if s.low_confidence else ""}
+
+    @staticmethod
+    def _ca_fallback(s):
+        if not s.ca_events and not s.ca_gate_a and not s.ca_gate_b:
+            return "No corporate-action events scored in the lookback."
+        parts = [f"Corporate Actions Risk is {s.ca_risk_score:.1f} of 10 ({s.ca_risk_band}); Opportunity is {s.ca_opportunity_score:.1f}."]
+        top = sorted(s.ca_events, key=lambda e: -e["score"])[:2]
+        if top:
+            parts.append("Driven by " + "; ".join(f"{e['event_type'].replace('_', ' ')} ({e['date']})" for e in top) + ".")
+        if s.ca_gate_a:
+            parts.append("Gate A override: " + ", ".join(e["event_type"].replace("_", " ") for e in s.ca_gate_a) + " forces the Exit band.")
+        if s.ca_gate_b:
+            parts.append(f"{len(s.ca_gate_b)} event(s) data-quarantined and excluded from the Risk score.")
+        return " ".join(parts)
 
     def portfolio(self, facts):
         return default_observations(facts)
@@ -151,7 +185,7 @@ class AnthropicNarrator:
 
     def holding(self, s, items):
         out = self._call(SYSTEM, json.dumps(evidence_payload(s, items), default=str), TOOL)
-        for k in ("sentiment_rationale", "governance_rationale", "one_line_read", "key_corporate_action", "coverage_note"):
+        for k in ("sentiment_rationale", "governance_rationale", "ca_rationale", "one_line_read", "key_corporate_action", "coverage_note"):
             out.setdefault(k, "")
         return out
 

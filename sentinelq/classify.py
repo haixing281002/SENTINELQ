@@ -12,8 +12,8 @@ from typing import Protocol
 from .models import Label, RawItem
 from .rubric import Rubric
 
-PROMPT_VERSION = "v2"            # cache key. v2: gist + scale-anchored sentiment + a rationale that justifies the level (v1 labels are re-labelled)
-PROMPT_REVISION = "v2.0-gist-scale"  # v1.2: rationale must explain the score, not restate the headline (new labels only; cached v1 labels keep their old text); recorded in the manifest; a change that invalidates old labels must bump PROMPT_VERSION itself
+PROMPT_VERSION = "v3"            # cache key. v3: Corporate Actions v2 taxonomy + ca_stage/ca_size_pct/ca_days_to_effective (v2 labels are re-labelled)
+PROMPT_REVISION = "v3.0-corporate-actions"  # gist + scale-anchored sentiment + a rationale that justifies the level + the full severity-table taxonomy; recorded in the manifest; a change that invalidates old labels must bump PROMPT_VERSION itself
 
 SYSTEM = (
     "You are a labelling function for an equity research pipeline. You are given ONE news item "
@@ -75,6 +75,25 @@ SYSTEM = (
     "Calibration: SEBI/regulator order or settlement -> regulatory_action, -2, governance. CXO/CFO resignation -> management_exit, -2 (-1 if planned / orderly), "
     "governance. Record quarterly profit / revenue growth -> earnings_beat, +2. Profit collapse -> earnings_miss, -2. Routine broker "
     "target reiteration -> analyst_action, +1 or 0. Dividend declared -> dividend, +1. "
+    "CORPORATE ACTION TYPES (pick the specific one, not a vaguer neighbour - the severity scale depends on it): "
+    "insolvency_admission = IBC admission, compulsory delisting, or a long trading suspension. "
+    "demerger = a spin-off / hive-off of a business into a separate listed entity. merger_acquisition = amalgamation or a share-swap merger (also used for an M&A deal of any kind). "
+    "split_bonus = a stock split, bonus issue or share consolidation. open_offer_takeover = an open offer, takeover bid, or a voluntary delisting offer. "
+    "rights_issue = a rights issue to existing shareholders. pledge = a promoter pledge CREATED or increased. pledge_invocation = a lender INVOKING a pledge (forced sale) - always severe. "
+    "dilution = fresh equity that increases the share count: QIP, preferential allotment, warrants, FCCB or ESOP conversion. "
+    "special_dividend = a one-off large dividend outside the regular payout. dividend = a regular/ordinary dividend. buyback = a share buyback. "
+    "lock_in_expiry = a scheduled post-IPO or post-preferential lock-in ending. name_symbol_isin_change = a company name, trading symbol or ISIN change. "
+    "fy_end_change = a change of financial year-end. routine_agm_egm = a routine AGM/EGM resolution not covered by another type above. "
+    "admin_notice = registrar, registered office or company-secretary change, or a trading-window closure notice - essentially no impact. "
+    "noise_notice = newspaper publication copies, duplicate/lost share-certificate notices, compliance certificates - pure noise, sentiment 0. "
+    "index_inclusion / index_exclusion = added to or dropped from an index (Nifty, Sensex, sectoral). exchange_surveillance = placed into or removed from "
+    "ASM/GSM/trade-for-trade/a circuit-band restriction. "
+    "For a corporate-action type, also give (all optional, omit if the text does not say): "
+    "ca_stage = how certain/advanced it is - 'board_intimation' (board informed / just announced), 'board_approved' (board has approved it), "
+    "'approval_obtained' (shareholder or regulatory approval obtained), or 'completed' (record date fixed or already happened). "
+    "ca_size_pct = the % that measures its size where one is stated: dilution as % of shares outstanding, pledged % of promoter holding, or the rights-issue discount %. "
+    "ca_days_to_effective = if the text gives a FUTURE effective/record/ex-date, how many days from the publish date to that date (a positive number); "
+    "omit entirely if the action has already happened or no date is given. "
     "You must answer by calling the label_item tool."
 )
 
@@ -104,6 +123,9 @@ def tool_schema(r: Rubric) -> dict:
                 "people_direction": {"type": "string", "enum": ["unplanned_exit", "planned_exit_or_succession", "appointment", "promotion_or_elevation", "reappointment", "n/a"]},
                 "role_tier": {"type": "string", "enum": ["cxo_cs_cfo_compliance", "senior_management", "below_cxo", "non_executive_director", "n/a"]},
                 "event_key": {"type": "string"},
+                "ca_stage": {"type": "string", "enum": ["board_intimation", "board_approved", "approval_obtained", "completed"]},
+                "ca_size_pct": {"type": "number"},
+                "ca_days_to_effective": {"type": "number"},
             },
             "required": ["event_type", "sentiment", "gist", "rationale", "governance_flag", "about_company"],
             "additionalProperties": False,
@@ -256,4 +278,5 @@ def to_label(d: dict, title: str = "") -> Label:
                  relevant=bool(d.get("about_company", True)),
                  subject=d.get("subject"), occurred_at_company=d.get("occurred_at_company"), action_stage=d.get("action_stage"),
                  severity=d.get("severity"), amount_inr_cr=d.get("amount_inr_cr"), people_direction=d.get("people_direction"),
-                 role_tier=d.get("role_tier"), event_key=d.get("event_key"), substance=d.get("substance") or "primary", gist=d.get("gist") or "")
+                 role_tier=d.get("role_tier"), event_key=d.get("event_key"), substance=d.get("substance") or "primary", gist=d.get("gist") or "",
+                 ca_stage=d.get("ca_stage"), ca_size_pct=d.get("ca_size_pct"), ca_days_to_effective=d.get("ca_days_to_effective"))

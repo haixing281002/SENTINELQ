@@ -21,6 +21,8 @@ RULE, TINT = "#c9d1e5", "#f3f6fd"
 GREEN, GREEN2, AMBER, RED = "#2e7d5b", "#4a8f6d", "#a97528", "#9b2f35"
 LABEL_FILL = {"Clean": "#e4f1ea", "Watch": "#fbf1de", "Flag": "#f7e4e5"}
 LABEL_TEXT = {"Clean": GREEN, "Watch": AMBER, "Flag": RED}
+CA_BAND_FILL = {"Log": "#e4f1ea", "Watch": "#fbf1de", "Review": "#fbf1de", "Act": "#f7e4e5", "Exit": "#f7e4e5"}
+CA_BAND_TEXT = {"Log": GREEN, "Watch": AMBER, "Review": AMBER, "Act": RED, "Exit": RED}
 SENT_TEXT = {2: GREEN, 1: GREEN2, 0: AMBER, -1: RED, -2: RED}
 C = colors.HexColor
 
@@ -144,12 +146,15 @@ def build_pdf(path: Path, res: dict, rubric, narr: dict, observations: list[dict
     R = lambda s: s  # readability
     st += [P("Sentiment score", H2), Paragraph(
         rl("Sentiment is scored on a fixed −2 to +2 scale, anchored to a defined event taxonomy (earnings beats and misses, guidance changes, order wins, litigation, regulatory action, corporate actions). Each score is ")
-        + "<b>absolute</b>" + rl(" — it reflects the stock on its own merits, not its rank within the portfolio — so a +2 means the same thing whether applied to a bank or a pharma name. News items are recency-weighted so recent developments carry more weight than older ones. Price movement and stock returns never feed the sentiment score."), BODY)]
+        + "<b>absolute</b>" + rl(" — it reflects the stock on its own merits, not its rank within the portfolio — so a +2 means the same thing whether applied to a bank or a pharma name. "
+                                 "Two means are shown: a ") + "<b>weighted</b>" + rl(" mean (recent news and higher-confidence sources count more) and a ") + "<b>raw</b>" + rl(" mean (a plain average of the same counted articles, no weighting). Both are banded directly — a mean of 1.6 or more is +2, 0.5 to 1.59 is +1, and the mirror for negative — with no further scaling. Price movement and stock returns never feed the sentiment score."), BODY)]
     st += [P("Governance score", H2), Paragraph(
         rl("Governance is scored on a 0–100 scale, starting at 100 with fixed penalties applied for specific event types (see rubric on next page). Scores translate to three labels — ")
         + rl("<b>Clean</b> (≥ 95), <b>Watch</b> (80–94), <b>Flag</b> (below 80)").replace("&lt;b&gt;", "<b>") .replace("&lt;/b&gt;", "</b>")
         + rl(". Flag names are highlighted in red on the summary table and warrant IC-level scrutiny before additional risk is added. The rubric is applied mechanically so the same event produces the same penalty across all holdings."), BODY)]
-    st += [P("Corporate actions", H2), P("Listed factually — dividends, buybacks, splits, bonuses, rights, M&A, delistings, capex commitments. They inform context but do not feed into either the sentiment or the governance score.", BODY),
+    st += [P("Corporate Actions score", H2), Paragraph(
+        rl("Corporate Actions is scored separately on its own 0–10 scale: each event's severity (how dangerous that event type is) is multiplied by how advanced it is, how close or recent it is, and how large this instance is, capped at 10. Negative and unclear-direction events combine into a ")
+        + "<b>Risk</b>" + rl(" score; positive-direction events combine into an ") + "<b>Opportunity</b>" + rl(" score — never summed or averaged, so one severe event is never diluted by several mild ones. Risk bands to an action: Log, Watch, Review, Act or Exit (see rubric on next page). An event that is also sentiment-relevant (e.g. an auditor resignation) feeds both scores from the same article — nothing is walled off to one score only."), BODY),
            P("Every score in this report can be traced back to specific, dated, sourced news in the appendix. Where retrieval coverage is thin, this is stated explicitly in the rationale.", NOTE)]
     retr = res["run"].get("retrieval") or {}
     if retr.get("mode") == "live_index_backdated":       # Reconciliation fix 1: never present a backdated live search as a backtest
@@ -193,7 +198,27 @@ def build_pdf(path: Path, res: dict, rubric, narr: dict, observations: list[dict
     t = Table(rows, colWidths=[73.7, 85.0, W - 158.7], hAlign="CENTER")
     t.setStyle(grid([("BACKGROUND", (0, i), (0, i), C(LABEL_FILL[lab])) for i, lab in enumerate(g["label_text"], 1)]
                     + [("ROWBACKGROUNDS", (1, 1), (-1, -1), [colors.white])]))
-    st += [t, PageBreak()]
+    st += [t, Spacer(1, 16), P("Corporate Actions severity", H2)]
+    ca = rubric["corporate_actions"]
+    rows = [[P("Sev.", HDR), P("Event type", HDR), P("Damage", HDR)]]
+    for et, sev in sorted(ca["severity"].items(), key=lambda x: -x[1]):
+        rows.append([P(str(sev), CELLC), P(et.replace("_", " "), CELLB), P(ca["damage_type"].get(et, "").capitalize(), CELL)])
+    t = Table(rows, colWidths=[36.9, 180.0, W - 216.9], hAlign="CENTER")
+    t.setStyle(grid())
+    st += [t, Spacer(1, 16), P("Corporate Actions bands", H2)]
+    rows = [[P("Risk score", HDR), P("Band", HDR), P("Default action", HDR)]]
+    act = {"Log": "Nothing.", "Watch": "Add to watchlist; no trading restriction.", "Review": "Block new buys; review before the next rebalance.",
+           "Act": "Trim, hedge, or write down why you are holding; exclude from factor scoring until resolved.",
+           "Exit": "Exit by default; holding requires explicit sign-off."}
+    for lo, hi, lab in ca["bands"]:
+        rows.append([P(f"{lo:g} – {hi:g}", CELLC), P(lab, CELLBC), P(act[lab], CELL)])
+    t = Table(rows, colWidths=[73.7, 73.7, W - 147.4], hAlign="CENTER")
+    t.setStyle(grid([("BACKGROUND", (1, i), (1, i), C(CA_BAND_FILL[lab])) for i, (_, _, lab) in enumerate(ca["bands"], 1)]
+                    + [("ROWBACKGROUNDS", (0, 1), (0, -1), [colors.white]), ("ROWBACKGROUNDS", (2, 1), (2, -1), [colors.white])]))
+    st += [t, P(f"Opportunity score ≥ {ca['opportunity_review_at']:g} triggers an event-trade review. Gate A (insolvency, pledge invocation, an "
+               "auditor resignation citing withheld information) overrides the arithmetic straight to Exit. Gate B (splits, bonuses, demergers, "
+               "mergers, rights issues, special dividends, ISIN/symbol changes) is excluded from the Risk score and quarantined for the "
+               "adjustment-factor checks instead.", NOTE), PageBreak()]
 
     # ============ Scorecard table ============
     st += h1(f"Scorecard — all {n} holdings") + [P("Sorted by sentiment score (high to low), then by governance score.", SUBNOTE)]
@@ -233,17 +258,20 @@ def build_pdf(path: Path, res: dict, rubric, narr: dict, observations: list[dict
         nr = narr[s.symbol]
         lab = "FLAG" if s.governance_label == "Flag" else s.governance_label
         sc_col = SENT_TEXT.get(s.company_sentiment, AMBER)
+        ca_seg = (f'<font color="{MUTED}"> · </font><font color="{CA_BAND_TEXT.get(s.ca_risk_band, AMBER)}">'
+                  f'{rl(f"CA Risk {s.ca_risk_score:.1f} ({s.ca_risk_band})")}</font>') if (s.ca_events or s.ca_gate_a) else ""
         line = Paragraph(f'<font color="{sc_col}">{rl("Sentiment " + sent_txt(s.company_sentiment))}</font>'
                          f'<font color="{MUTED}"> · </font>'
-                         f'<font color="{LABEL_TEXT[s.governance_label]}">{rl(f"Governance {s.governance_score:g} ({lab})")}</font>', SCORE)
+                         f'<font color="{LABEL_TEXT[s.governance_label]}">{rl(f"Governance {s.governance_score:g} ({lab})")}</font>' + ca_seg, SCORE)
         sent = paras(nr["sentiment_rationale"]) + (paras(nr["coverage_note"]) if nr.get("coverage_note") else [])
         gov = paras(nr["governance_rationale"])
+        ca_txt = paras(nr.get("ca_rationale") or "No corporate-action events scored in the lookback.")
         head = [Paragraph(rl(s.name), ParagraphStyle("hold0", parent=HOLD, spaceBefore=0 if first else 20)), line]
         if s.coverage_map:
             head.append(Paragraph(f'<font color="{MUTED}">{rl("Coverage: " + s.coverage_map)}</font>', SUBNOTE))
         head.append(P("Sentiment rationale", H2))
         st.append(KeepTogether(head + sent[:1]))
-        st += sent[1:] + [P("Governance rationale", H2A)] + gov
+        st += sent[1:] + [P("Governance rationale", H2A)] + gov + [P("Corporate Actions rationale", H2A)] + ca_txt
         first = False
     st += [Spacer(1, 6), HRFlowable(width="100%", thickness=0.5, color=C(RULE), spaceBefore=4, spaceAfter=4),
            P("This report is a prototype research aid produced by the Portfolio Signal Engine. Sentiment and governance scores are built from retrieved, dated, linked news items only, using the fixed rubric shown on page 2. Direct BSE/NSE filings and Ministry-of-Corporate-Affairs registry integration is scheduled for the production build and will materially improve governance-signal coverage. This document is not investment advice; position weights and universe are as supplied in the portfolio file.", DISC)]

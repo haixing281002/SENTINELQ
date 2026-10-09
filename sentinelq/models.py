@@ -71,6 +71,10 @@ class Label:
     event_key: str | None = None            # short id of the underlying real-world event, for same-event de-duplication
     substance: str = "primary"              # primary | passing (the company is a mention, not the subject) | boilerplate (templated, no event)
     gist: str = ""                          # 1-2 sentences: what the article reports, with its numbers (read from the body when available)
+    # --- Corporate Actions v2 (severity x stage x timing x size) ---
+    ca_stage: str | None = None             # board_intimation | board_approved | approval_obtained | completed
+    ca_size_pct: float | None = None        # dilution %, pledged % of promoter holding, or rights discount %, as applicable
+    ca_days_to_effective: float | None = None  # days from publish date to a stated future effective/record/ex-date; omit or <=0 if already past
 
 
 @dataclass
@@ -97,7 +101,8 @@ class LabelledItem:
             d.update(event_type=self.label.event_type, sentiment=self.label.sentiment,
                      gist=self.label.gist, rationale=self.label.rationale,
                      governance_flag=self.label.governance_flag,
-                     materiality=self.label.materiality, historical=self.label.historical)
+                     materiality=self.label.materiality, historical=self.label.historical,
+                     ca_stage=self.label.ca_stage, ca_size_pct=self.label.ca_size_pct, ca_days_to_effective=self.label.ca_days_to_effective)
         return d
 
 
@@ -146,6 +151,19 @@ class StockScore:
     conf_weighted_n: float | None = None
     window_dominated: bool = False          # acceptance A5.1: one window holds > 70% of the events
     sentiment_points: int | None = None     # the same net as whole points on -100..+100 (net x 50); the -2..+2 score is its band
+    # --- v2.0.0: raw and weighted sentiment, no x50 - both banded directly on the -2..+2 mean ---
+    sentiment_raw_mean: float | None = None     # plain mean of every counted article's label score (no weight, no confidence)
+    sentiment_raw_score: int | None = None      # that mean, banded to -2..+2
+    sentiment_weighted_mean: float | None = None  # recency x confidence weighted mean (same arithmetic as company_sentiment_raw)
+    sentiment_weighted_score: int | None = None   # that mean, banded to -2..+2 (this is the headline "Sentiment" score going forward)
+    # --- Corporate Actions v2 ---
+    ca_risk_score: float | None = None          # 0..10, combined from negative/unclear-direction events
+    ca_opportunity_score: float | None = None   # 0..10, combined from positive-direction events
+    ca_risk_band: str = ""                      # Log | Watch | Review | Act | Exit
+    ca_gate_a: list = field(default_factory=list)   # hard-override events that forced Exit regardless of the arithmetic
+    ca_gate_b: list = field(default_factory=list)   # data-quarantine events, excluded from the Risk score
+    ca_events: list = field(default_factory=list)   # every scored CA event: type, severity, stage, timing, size, event_score, direction
+    ca_tracked_not_scored: list = field(default_factory=list)  # disclosure events kept on the calendar but not in the arithmetic
 
     def to_dict(self):
         return asdict(self)

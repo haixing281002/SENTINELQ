@@ -518,7 +518,9 @@ def test_tier_corrections_and_new_boilerplate_patterns():
     from sentinelq.sampler import is_boilerplate
     assert tier_of("aninews.in") == "T1" and tier_of("businesstoday.in") == "T2" and tier_of("zeebiz.com") == "T2"
     assert is_boilerplate("Dixon Tech, Bharat Dynamics, Manyavar, Dividends: Last Day To Buy") and is_boilerplate("Godrej Industries Group unveils new brand film")
-    assert is_boilerplate("Dixon Technologies Records Rs 195 Crore Block Trade on NSE") and not is_boilerplate("Godrej Industries Q1 net profit falls 19%")
+    # v2.0.0: a single-company block-trade notice with a real figure is no longer blind-filtered - it can be genuine material
+    # ownership-change evidence, so it now reaches the model instead (which judges it on its merits, same as any other article).
+    assert not is_boilerplate("Dixon Technologies Records Rs 195 Crore Block Trade on NSE") and not is_boilerplate("Godrej Industries Q1 net profit falls 19%")
 
 
 def test_recency_is_a_flat_weight_per_window():
@@ -595,10 +597,11 @@ def test_score_rationale_explains_drivers_not_headlines():
     ev = {"insufficient": ""}
     txt = explain_sentiment(items, AS_OF, R, ev)
     _, mean, _ = sentiment_terms(items, AS_OF, R)
-    from sentinelq.score import to_points, to_band
-    assert f"weighted average article score is {to_points(mean, R):+d} on a -100..+100 scale" in txt and f"Scored {to_band(mean, R):+d}" in txt
+    from sentinelq.score import to_band_raw
+    # v2.0.0: no x50 scaling anywhere - the mean and every push are stated directly on the -2..+2 scale
+    assert f"weighted average article score is {mean:+.2f} on the -2..+2 scale" in txt and f"Scored {to_band_raw(mean, R):+d}" in txt
     assert "Pushing up" in txt and "Pulling down" in txt and "Q2 profit up 40%" in txt and "Q4 profit collapses" in txt
-    assert "1 not counted" in txt and "0 neutral" in txt                                # v1.9.1: zeros excluded from the mean, so +2/-2 can surface
+    assert "1 not counted" in txt and "0 neutral" in txt                                # zeros excluded from the mean, so +2/-2 can surface
     assert explain_sentiment(items, AS_OF, R, {"insufficient": "only 2 event(s)"}).startswith("Sentiment not scored")
 
 

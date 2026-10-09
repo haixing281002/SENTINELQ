@@ -26,14 +26,21 @@ CONF_UNPENALISED_BELOW = 0.4    # a governance event with conf < this and no T1/
 
 # Boilerplate headlines: templated price / listicle items that carry no event. Dropped BEFORE the model sees them (disclosed as
 # 'boilerplate_headline'); editable. The model's own `substance` answer catches the rest ('model_boilerplate').
+# v2.0.0: a lighter pre-model bar than before, but multi-stock roundup formats ("Stocks to watch: X, Y, Z" / "Dividends: Last Day
+# To Buy" listing several names) stay filtered - they carry no single-company content by construction, so letting them through just
+# adds label cost for nothing. What's no longer blind-filtered: "here's why" / "what should investors" / "trading ideas" / "block
+# deal" / "bulk deal" / "multibagger" etc. - phrasing that often DOES lead into genuine single-company analysis, which a blanket
+# regex can't tell from the cases that don't. The model reliably judges substance now that the anti-headline-copy guard is in place.
+# Dedupe/merge-into-events is unaffected either way.
 BOILERPLATE_PATTERNS = [
     r"share price (today|live|update)", r"stock price (today|live)", r"\bbuy,? sell or hold\b", r"should you (buy|sell|hold)",
     r"stocks? to (watch|buy|track)( today)?", r"top (stocks|picks|gainers|losers)", r"live updates?", r"\bin focus\b", r"shares? in (focus|news)",
-    r"record date (today|alert|tomorrow)", r"ex-?dividend (today|date alert)", r"trading (ideas?|strategy)", r"technical (view|analysis|chart)",
-    r"\bintraday\b", r"52-week (high|low)", r"stocks? (rally|surge|jump|fall|drop|slip|crash)e?s? \d+%", r"market (wrap|highlights|roundup)",
-    r"\bhere'?s why\b", r"what (should|do) investors", r"\bF&O\b", r"\bweekly wrap\b", r"(nifty|sensex) (today|ends|opens|closes)",
-    r"last day to buy", r"\bex-?date\b", r"dividends?: ", r"block (trade|deal)", r"bulk deal", r"brand film", r"hosts? (a |an )?(delegation|summit|conclave|webinar)",
-    r"shares? (jump|rise|gain|fall|slip|drop|tank|surge)s? \d+%", r"stocks? in (news|action)", r"multibagger", r"wealth creator",
+    r"record date (today|alert|tomorrow)", r"ex-?dividend (today|date alert)", r"technical (view|analysis|chart)",
+    r"\bintraday\b", r"52-week (high|low)", r"market (wrap|highlights|roundup)",
+    r"\bF&O\b", r"\bweekly wrap\b", r"(nifty|sensex) (today|ends|opens|closes)",
+    r"last day to buy", r"\bex-?date\b", r"dividends?: ", r"brand film", r"hosts? (a |an )?(delegation|summit|conclave|webinar)",
+    r"stocks? (rally|surge|jump|fall|drop|slip|crash)e?s? \d+%", r"shares? (jump|rise|gain|fall|slip|drop|tank|surge)s? \d+%",
+    r"stocks? in (news|action)",
 ]
 MERGE_RESULTS_SAME_QUARTER = True   # results-type events of the same type in the same quarter are ONE event (sources pooled)
 

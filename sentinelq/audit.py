@@ -67,7 +67,12 @@ def score_workings(result: dict, rubric) -> list[dict]:
                      "note": s.governance_label})
         for d in s.corporate_action_detail:
             rows.append({"symbol": s.symbol, "component": "corporate-action", "date": d["date"], "headline": d["headline"], "url": d["url"],
-                         "event_type": d["event_type"], "label_value": d["materiality"], "age_days": "", "weight": "", "contribution": d["contribution"], "note": ""})
+                         "event_type": d["event_type"], "label_value": d["direction"], "age_days": "", "weight": d.get("stage_mult", ""),
+                         "contribution": d["score"], "note": f"severity {d['severity']} x stage {d.get('stage_mult','')} x timing {d.get('timing_mult','')} x size {d.get('size_mult','')}"})
+        if s.ca_events or s.ca_gate_a:
+            rows.append({"symbol": s.symbol, "component": "corporate-action-total", "date": "", "headline": "Risk/Opportunity combine", "url": "",
+                         "event_type": "", "label_value": s.ca_risk_band, "age_days": "", "weight": "", "contribution": s.ca_risk_score,
+                         "note": f"opportunity {s.ca_opportunity_score}"})
     return rows
 
 

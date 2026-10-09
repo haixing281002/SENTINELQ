@@ -43,6 +43,35 @@ def to_band(x: float | None, r: Rubric) -> int | None:
     return sign * (2 if a >= b["plus2"] else 1 if a >= b["plus1"] else 0)
 
 
+def to_band_raw(mean: float | None, r: Rubric) -> int | None:
+    """v2.0.0: band a -2..+2 mean DIRECTLY, no x50 scaling. >=1.6 -> +2 (needs materially stronger evidence than a bare
+    round), 0.5..1.59 -> +1 (so a mean of 1.2 stays +1), -0.49..0.49 -> 0, mirrored negative. Used for BOTH the raw mean
+    (plain average of every counted article) and the weighted mean (recency x confidence weighted average)."""
+    c = r["sentiment"].get("band_cutoffs")
+    if mean is None:
+        return None
+    if not c:
+        return to_integer(mean)
+    if mean >= c["plus2_at"]:
+        return 2
+    if mean >= c["plus1_at"]:
+        return 1
+    if mean <= c["minus2_at"]:
+        return -2
+    if mean <= c["minus1_at"]:
+        return -1
+    return 0
+
+
+def raw_sentiment_mean(items: list[LabelledItem]) -> float | None:
+    """v2.0.0: the plain, unweighted mean of every counted article's label score - no recency weight, no confidence,
+    no x50. This is the 'what did the raw labels say, on average' number, sitting beside the weighted mean."""
+    vals = [li.label.sentiment for li in items if feeds_sentiment(li)]
+    nz = [v for v in vals if v != 0]          # same signal-events convention as the weighted mean: zeros carry no information
+    use = nz if nz else vals
+    return sum(use) / len(use) if use else None
+
+
 def event_weight(li: LabelledItem, as_of: date, r: Rubric) -> float:
     """Recency weight x event confidence (A4). An item without event fields (legacy / tests) has confidence 1."""
     conf = li.item.confidence if li.item.confidence is not None and r["sentiment"].get("use_source_confidence", True) else 1.0
@@ -50,13 +79,31 @@ def event_weight(li: LabelledItem, as_of: date, r: Rubric) -> float:
 
 
 def feeds_sentiment(li: LabelledItem) -> bool:
-    """News from the sentiment / results passes, not price-only, and substantively about the company (a passing mention is coverage, not
-    signal). A zero-sentiment NOISE_ZERO_TYPES event (routine admin with no stated impact) is excluded the same way price_move is - it is
-    not a balanced/neutral event, it carries no sentiment information at all; the same event type with a non-zero label still feeds in."""
+    """v2.0.0: ANY news article with a real event about the company can feed sentiment - not only ones from the stratified sentiment
+    sample. An article found by the governance or results search is still genuine evidence of how the year went (an auditor
+    resignation is bad news whichever pass found it), so it is no longer gated on item.purpose. Still excluded: price-only items, a
+    passing mention (coverage, not signal), and a zero-sentiment NOISE_ZERO_TYPES event (routine admin with no stated impact - carries
+    no sentiment information at all, the same treatment a price move gets). The same event type with a non-zero label still feeds in.
+    One article can feed sentiment AND corporate actions AND governance at once - see feeds_corporate_action / label.governance_flag."""
     from .config import NOISE_ZERO_TYPES
-    return (li.item.kind == "news" and li.item.purpose == "sentiment" and li.label.event_type != "price_move"
+    return (li.item.kind == "news" and li.label.event_type != "price_move"
             and getattr(li.label, "substance", "primary") != "passing"
             and not (li.label.sentiment == 0 and li.label.event_type in NOISE_ZERO_TYPES))
+
+
+def is_sentiment_evidence(li: LabelledItem) -> bool:
+    """Broader than feeds_sentiment: any news item that is substantively about the company and not price-only - including a
+    zero-scored administrative item, which is real coverage even though it carries no sentiment signal. Used for evidence
+    sufficiency (MIN_EVENTS, the lookback span) so an ordinary year of routine-but-real coverage is never called 'insufficient'
+    just because none of it happened to move the needle."""
+    return (li.item.kind == "news" and li.label.event_type != "price_move"
+            and getattr(li.label, "substance", "primary") != "passing")
+
+
+def feeds_corporate_action(li: LabelledItem, r: Rubric) -> bool:
+    """True if this article's event type is in the Corporate Actions severity table (v2.0.0) - independent of whether it also
+    feeds sentiment or governance. The same article commonly feeds all three (e.g. an auditor resignation)."""
+    return li.item.kind == "news" and li.label.event_type in r["corporate_actions"]["severity"]
 
 
 def sentiment_terms(items: list[LabelledItem], as_of: date, r: Rubric) -> tuple[list[tuple[LabelledItem, float, bool, str]], float | None, str]:
@@ -110,7 +157,7 @@ def evidence_standard(items: list[LabelledItem], as_of: date, r: Rubric) -> dict
     """Minimum evidence standard (Reconciliation fix 6): below N relevant articles, or with no results print in the window,
     sentiment is 'Insufficient Data' rather than a forced +1 or 0. Also measures how much of the lookback the evidence really covers."""
     c = r["sentiment"]
-    rel = [li for li in items if li.item.kind == "news" and li.item.purpose == "sentiment" and li.label.event_type != "price_move"]
+    rel = [li for li in items if is_sentiment_evidence(li)]
     results = [li for li in rel if li.label.event_type in c["results_event_types"]]
     dates = sorted(li.item.published for li in rel if li.item.published)
     span = (date.fromisoformat(dates[-1]) - date.fromisoformat(dates[0])).days if dates else None
@@ -414,24 +461,96 @@ def _neg_date(s: str) -> int:
     return -d.toordinal() if d else 0
 
 
-def corporate_actions(items: list[LabelledItem], r: Rubric) -> tuple[float, list[dict]]:
+def ca_event_score(li: LabelledItem, r: Rubric, as_of: date) -> dict | None:
+    """One event's score = severity x stage x timing x size, capped at 10 (Corporate Action Scoring Rules, 8-Oct-2026).
+    Direction (positive/negative/unclear) is recorded separately from label.sentiment and is NEVER multiplied into the score."""
     ca = r["corporate_actions"]
+    et = li.label.event_type
+    if et not in ca["severity"]:
+        return None
+    sev = ca["severity"][et]
+    stage = getattr(li.label, "ca_stage", None) or ca["stage_multiplier"]["_default_when_unstated"]
+    stage_mult = ca["stage_multiplier"].get(stage, ca["stage_multiplier"][ca["stage_multiplier"]["_default_when_unstated"]])
+    days_eff = getattr(li.label, "ca_days_to_effective", None)
+    if days_eff and days_eff > 0:
+        t = ca["timing"]
+        timing_mult = t["upcoming_under_15d"] if days_eff < 15 else t["upcoming_15_to_60d"] if days_eff <= 60 else t["upcoming_over_60d"]
+        timing_basis = f"upcoming in {days_eff:g}d"
+    else:
+        pub = parse_date(li.item.published)
+        age = max((as_of - pub).days, 0) if pub else 0
+        hl = ca["timing"]["past_half_life_days"].get(et, ca["timing"]["past_half_life_days"]["_default"])
+        timing_mult = max(0.1, 0.5 ** (age / hl))
+        timing_basis = f"{age}d old, half-life {hl}d"
+    size_pct = getattr(li.label, "ca_size_pct", None)
+    if size_pct is not None:
+        size_mult = next((m for cutoff, m in ca["size_bands"] if size_pct <= cutoff), ca["size_bands"][-1][1])
+        size_basis = f"{size_pct:g}%"
+    elif li.label.materiality and et in ("dilution", "rights_issue", "pledge", "pledge_invocation", "buyback", "open_offer_takeover"):
+        size_mult = ca["size_fallback_from_materiality"].get(li.label.materiality, 1.0)
+        size_basis = f"materiality {li.label.materiality} (no %  given)"
+    else:
+        size_mult = ca["size_not_applicable_multiplier"]
+        size_basis = "n/a for this event type"
+    raw = sev * stage_mult * timing_mult * size_mult
+    score = round(min(10.0, raw), 2)
+    direction = "positive" if li.label.sentiment > 0 else "negative" if li.label.sentiment < 0 else "unclear"
+    gate_a = (et in ca["gate_a_hard_exit"]["event_types"]
+              or (et == "auditor_resignation" and li.label.severity == ca["gate_a_hard_exit"]["auditor_resignation_requires_severity"]))
+    gate_b = et in ca["gate_b_data_quarantine"]["event_types"]
+    tracked_only = et in ca["disclosure_tracked_not_scored"]["event_types"]
+    return {"event_type": et, "severity": sev, "stage": stage, "stage_mult": stage_mult, "timing_mult": round(timing_mult, 3),
+            "timing_basis": timing_basis, "size_mult": size_mult, "size_basis": size_basis, "raw": round(raw, 2), "score": score,
+            "direction": direction, "gate_a": gate_a, "gate_b": gate_b, "tracked_only": tracked_only,
+            "date": li.item.published, "headline": li.item.title, "url": li.item.url, "rationale": li.label.rationale}
+
+
+def ca_combine(event_scores: list[float]) -> float:
+    """Chance at least one event bites: 1 - product(1 - score/10), x10. Capped at 10, one severe event dominates,
+    moderate events stack (three 4s -> 7.8, not 12 by summing or 4 by averaging)."""
+    if not event_scores:
+        return 0.0
+    prod = 1.0
+    for x in event_scores:
+        prod *= (1 - x / 10)
+    return round(10 * (1 - prod), 2)
+
+
+def ca_band(score: float, r: Rubric) -> str:
+    for lo, hi, label in r["corporate_actions"]["bands"]:
+        if lo <= score <= hi + 1e-9:
+            return label
+    return r["corporate_actions"]["bands"][-1][2]
+
+
+def corporate_actions(items: list[LabelledItem], r: Rubric, as_of: date) -> dict:
+    """Full Corporate Actions v2 scoring: severity x stage x timing x size per event (deduped - repeat headlines of
+    one declaration are ONE action), combined into a Risk score (negative/unclear direction) and an Opportunity score
+    (positive direction) via the probabilistic OR, banded, and checked against the two override gates."""
     from .lint import unique_actions
-    total, detail = 0.0, []
-    for li in unique_actions(items, r):          # repeat headlines of one declaration are ONE action
-        lab = li.label
-        if lab.event_type not in ca["base"]:
+    ca = r["corporate_actions"]
+    scored, gate_a_hit, gate_b_hit, tracked = [], [], [], []
+    for li in unique_actions(items, r):
+        ev = ca_event_score(li, r, as_of)
+        if ev is None:
             continue
-        base = ca["base"][lab.event_type]
-        if base == "by_sentiment_sign":
-            base = float((lab.sentiment > 0) - (lab.sentiment < 0))
-        mat = lab.materiality or "medium"
-        contrib = base * ca["materiality_multiplier"][mat]
-        total += contrib
-        detail.append({"event_type": lab.event_type, "materiality": mat, "contribution": contrib,
-                       "date": li.item.published, "headline": li.item.title, "url": li.item.url})
-    lo, hi = ca["clip"]
-    return max(lo, min(hi, total)), detail
+        if ev["tracked_only"]:
+            tracked.append(ev)
+            continue
+        if ev["gate_b"]:
+            gate_b_hit.append(ev)
+            continue
+        scored.append(ev)
+        if ev["gate_a"]:
+            gate_a_hit.append(ev)
+    risk_events = [e["score"] for e in scored if e["direction"] != "positive"]
+    opp_events = [e["score"] for e in scored if e["direction"] == "positive"]
+    risk_score = 10.0 if gate_a_hit else ca_combine(risk_events)
+    opp_score = ca_combine(opp_events)
+    band = "Exit" if gate_a_hit else ca_band(risk_score, r)
+    return {"risk_score": risk_score, "opportunity_score": opp_score, "band": band, "events": scored,
+            "gate_a": gate_a_hit, "gate_b": gate_b_hit, "tracked": tracked,
+            "opportunity_review": opp_score >= ca["opportunity_review_at"]}
 
 
 _PLAIN = {"earnings_beat": "results beat", "earnings_miss": "results miss", "guidance_change": "guidance change", "order_win": "order win",
@@ -450,8 +569,8 @@ def _mon(d: str) -> str:
 
 
 def explain_sentiment(items: list[LabelledItem], as_of: date, r: Rubric, ev: dict, top: int = 3) -> str:
-    """Plain-English 'why' for the sentiment score, read off the same terms the score is computed from. Whole numbers only:
-    each event's push is its share of the net in points (-100..+100), so the pushes add up (to rounding) to the stock's net points."""
+    """Plain-English 'why' for the WEIGHTED sentiment score, read off the same terms the score is computed from. v2.0.0: no
+    x50 scaling anywhere - the mean and every event's push are in the same -2..+2 units the labels themselves use."""
     if ev.get("insufficient"):
         return f"Sentiment not scored - {ev['insufficient']}."
     terms, mean, rule = sentiment_terms(items, as_of, r)
@@ -459,55 +578,54 @@ def explain_sentiment(items: list[LabelledItem], as_of: date, r: Rubric, ev: dic
     if mean is None or not inc:
         return "Sentiment not scored - no qualifying events."
     den = sum(w for _, w in inc)
-    k = r["sentiment"].get("points_scale", 50)
-    pulls = [(li, w, w * li.label.sentiment / den * k) for li, w in inc]
+    pulls = [(li, w, w * li.label.sentiment / den) for li, w in inc]
     pos = sorted((x for x in pulls if x[2] > 0), key=lambda x: -x[2])
     neg = sorted((x for x in pulls if x[2] < 0), key=lambda x: x[2])
     n0 = sum(1 for _, _, ok, _ in terms if not ok)
-    pts, band = to_points(mean, r), to_band(mean, r)
-    b = r["sentiment"].get("bands") or {"plus2": 75, "plus1": 25}
-    rng = {2: f">= +{b['plus2']}", 1: f"+{b['plus1']} to +{b['plus2'] - 1}", 0: f"-{b['plus1'] - 1} to +{b['plus1'] - 1}",
-           -1: f"-{b['plus2'] - 1} to -{b['plus1']}", -2: f"<= -{b['plus2']}"}[band]
+    band = to_band_raw(mean, r)
+    c = r["sentiment"].get("band_cutoffs") or {"plus2_at": 1.6, "plus1_at": 0.5, "minus1_at": -0.5, "minus2_at": -1.6}
+    rng = {2: f">= {c['plus2_at']:g}", 1: f"{c['plus1_at']:g} to {c['plus2_at'] - 0.01:g}", 0: f"{c['minus1_at'] + 0.01:g} to {c['plus1_at'] - 0.01:g}",
+           -1: f"{c['minus2_at'] + 0.01:g} to {c['minus1_at']:g}", -2: f"<= {c['minus2_at']:g}"}[band]
     lab = {2: "+2", 1: "+1", 0: "0", -1: "-1", -2: "-2"}
 
     def line(li, w, pull):
         kind = _PLAIN.get(li.label.event_type, li.label.event_type.replace("_", " "))
-        return f"\"{_short(li.item.title)}\" ({_mon(li.item.published)}, {kind} {lab[li.label.sentiment]}, {round(pull):+d} pts)"
+        return f"\"{_short(li.item.title)}\" ({_mon(li.item.published)}, {kind} {lab[li.label.sentiment]}, {pull:+.2f})"
     recent = sum(w for li, w in inc if (as_of - parse_date(li.item.published)).days <= 90) / den
     strong = sum(1 for li, _ in inc if abs(li.label.sentiment) == 2)
     nz = sum(1 for li, _ in inc if li.label.sentiment == 0)
-    out = [f"Scored {lab[band]} because the weighted average article score is {pts:+d} on a -100..+100 scale ({lab[band]} band is {rng}): "
+    out = [f"Scored {lab[band]} because the weighted average article score is {mean:+.2f} on the -2..+2 scale ({lab[band]} band is {rng}): "
            f"{len(pos)} positive, {nz} neutral and {len(neg)} negative articles ({strong} rated +/-2)"
            + (f", {n0} not counted" if n0 else "") + f"; the last 3 months carry {recent:.0%} of the weight."]
     if pos:
-        out.append(f"Pushing up ({round(sum(x[2] for x in pos)):+d} pts): " + "; ".join(line(*x) for x in pos[:top]) + ".")
+        out.append(f"Pushing up (+{sum(x[2] for x in pos):.2f}): " + "; ".join(line(*x) for x in pos[:top]) + ".")
     if neg:
-        out.append(f"Pulling down ({round(sum(x[2] for x in neg)):+d} pts): " + "; ".join(line(*x) for x in neg[:top]) + ".")
+        out.append(f"Pulling down ({sum(x[2] for x in neg):.2f}): " + "; ".join(line(*x) for x in neg[:top]) + ".")
     if "withheld" in rule or "capped" in rule:
         out.append("Rule applied: " + rule.split("; ", 1)[1] + ".")
     return " ".join(out)
 
 
 def drivers(items: list[LabelledItem], as_of: date, r: Rubric) -> tuple[list, list, dict]:
-    """(positives, negatives, facts) behind the sentiment score: each event with its whole-number push on the -100..+100 net,
-    strongest first. facts: net points, band, counts, recent share. Same arithmetic as explain_sentiment."""
+    """(positives, negatives, facts) behind the WEIGHTED sentiment mean: each event's push on the -2..+2 mean (its weighted
+    share of the article pool x its own score), strongest first. v2.0.0: no x50 - the push is in the same -2..+2 units as the
+    mean itself, so it reads directly (e.g. a push of +0.34 on a mean of 0.93)."""
     terms, mean, _ = sentiment_terms(items, as_of, r)
     inc = [(li, w) for li, w, ok, _ in terms if ok]
     if mean is None or not inc:
         return [], [], {}
     den = sum(w for _, w in inc)
-    k = r["sentiment"].get("points_scale", 50)
-    pulls = [(li, w * li.label.sentiment / den * k) for li, w in inc]
+    pulls = [(li, w * li.label.sentiment / den) for li, w in inc]
     pos = sorted((x for x in pulls if x[1] > 0), key=lambda x: -x[1])
     neg = sorted((x for x in pulls if x[1] < 0), key=lambda x: x[1])
-    facts = {"points": to_points(mean, r), "band": to_band(mean, r), "n_pos": len(pos), "n_neg": len(neg),
+    facts = {"mean": round(mean, 3), "band": to_band_raw(mean, r), "n_pos": len(pos), "n_neg": len(neg),
              "n_zero": sum(1 for _, _, ok, _ in terms if not ok),
              "recent": sum(w for li, w in inc if (as_of - parse_date(li.item.published)).days <= 90) / den}
     return pos, neg, facts
 
 
-def driver_line(li: LabelledItem, pts: float) -> str:
-    return f"{li.label.sentiment:+d} | {_mon(li.item.published)} | {_short(li.item.title, 75)} ({round(pts):+d} pts)"
+def driver_line(li: LabelledItem, push: float) -> str:
+    return f"{li.label.sentiment:+d} | {_mon(li.item.published)} | {_short(li.item.title, 75)} ({push:+.2f})"
 
 
 def explain_governance(score: float, label: str, pens: list[dict], ignored: list[dict]) -> str:
@@ -538,8 +656,7 @@ def event_treatment(items: list[LabelledItem], as_of: date, r: Rubric) -> dict[i
     from .config import NOISE_ZERO_TYPES
     for li in items:
         if id(li) not in out and li.item.kind == "news":
-            why = ("governance article - feeds the governance score, not sentiment" if li.item.purpose != "sentiment"
-                   else "share-price-only item - prices never feed sentiment" if li.label.event_type == "price_move"
+            why = ("share-price-only item - prices never feed sentiment" if li.label.event_type == "price_move"
                    else "the company is only mentioned in passing" if getattr(li.label, "substance", "primary") == "passing"
                    else "a neutral routine/administrative item carries no sentiment information" if (li.label.sentiment == 0 and li.label.event_type in NOISE_ZERO_TYPES)
                    else "excluded")
@@ -564,13 +681,16 @@ def score_portfolio(holdings: list[Holding], by_symbol: dict[str, list[LabelledI
     for h in holdings:
         items = by_symbol.get(h.symbol, [])
         cs = weighted_sentiment(items, as_of, r)
+        raw_mean = raw_sentiment_mean(items)
         ev = evidence_standard(items, as_of, r)
         if ev["insufficient"]:
             cs = None                                                     # Insufficient Data - never a forced +1 / 0
+            raw_mean = None
         g_score, g_label, pens = governance(items, r, h.name + " " + h.aliases.replace("|", " "), as_of)
         g_ignored = list(governance.ignored)
-        ca_score, ca_detail = corporate_actions(items, r)
-        n_news = sum(1 for i in items if i.item.kind == "news" and i.item.purpose == "sentiment")
+        ca = corporate_actions(items, r, as_of)
+        raw_mean = raw_sentiment_mean(items)
+        n_news = sum(1 for li_ in items if feeds_sentiment(li_))
         low = n_news < r["confidence"]["low_below_items"]
         pen_txt = ", ".join(f"{p['event_type']} {p['penalty']:+g}" for p in pens) or "none"
         note = ("INSUFFICIENT DATA: " + ev["insufficient"]) if ev["insufficient"] else ""
@@ -579,21 +699,25 @@ def score_portfolio(holdings: list[Holding], by_symbol: dict[str, list[LabelledI
         low = low or bool(ev["insufficient"]) or ev["collapsed"]
         cm = coverage_map(items, ev, as_of, r)
         why = explain_sentiment(items, as_of, r, ev) + " " + explain_governance(g_score, g_label, pens, g_ignored)
-        if ca_detail:
-            why += f" Corporate actions {round(ca_score):+d} (" + ", ".join(sorted({d['event_type'] for d in ca_detail})) + ")."
+        if ca["events"]:
+            why += f" Corporate Actions: Risk {ca['risk_score']:.1f}/10 ({ca['band']}), Opportunity {ca['opportunity_score']:.1f}/10 ("                    + ", ".join(sorted({e['event_type'] for e in ca['events']})) + ")."
         wk = (f"Governance = {r['governance']['start']} with penalties [{pen_txt}] = {g_score:g} ({g_label}). "
                f"Sentiment from {ev['n']} relevant news item(s), half-life {r['sentiment']['half_life_trading_days']} trading days, floor {r['sentiment'].get('recency_floor', 0)}."
                + (f" {note}." if note else "") + (" LOW CONFIDENCE." if low else ""))
         out.append(StockScore(
-            symbol=h.symbol, name=h.name, sector=h.sector, company_sentiment=to_band(cs, r), sentiment_points=to_points(cs, r),
+            symbol=h.symbol, name=h.name, sector=h.sector, company_sentiment=to_band_raw(cs, r), sentiment_points=to_points(cs, r),
             company_sentiment_raw=None if cs is None else round(cs, 3),
-            sector_sentiment=to_band(sector_sent.get(h.sector), r),
-            governance_score=g_score, governance_label=g_label, governance_penalties=pens, corporate_action_score=round(ca_score, 2),
-            corporate_action_detail=ca_detail, n_items=len(items), n_dropped=dropped_counts.get(h.symbol, 0), low_confidence=low,
+            sector_sentiment=to_band_raw(sector_sent.get(h.sector), r),
+            governance_score=g_score, governance_label=g_label, governance_penalties=pens, corporate_action_score=ca["risk_score"],
+            corporate_action_detail=ca["events"], n_items=len(items), n_dropped=dropped_counts.get(h.symbol, 0), low_confidence=low,
             rationale=why + (" LOW CONFIDENCE." if low else ""), workings=wk, cap=h.cap, weight=h.weight, sentiment_note=note, relevant_articles=ev["n"], evidence_first=ev["first"],
             evidence_last=ev["last"], evidence_span_days=ev["span"], governance_ignored=g_ignored,
             coverage_map=cm["text"], n_events=cm["n_events"], n_results_events=cm["n_results"], window_events=cm["windows"],
-            tier12_share=cm["tier12_share"], conf_weighted_n=cm["conf_weighted_n"], window_dominated=cm["dominated"]))
+            tier12_share=cm["tier12_share"], conf_weighted_n=cm["conf_weighted_n"], window_dominated=cm["dominated"],
+            sentiment_raw_mean=None if raw_mean is None else round(raw_mean, 3), sentiment_raw_score=to_band_raw(raw_mean, r),
+            sentiment_weighted_mean=None if cs is None else round(cs, 3), sentiment_weighted_score=to_band_raw(cs, r),
+            ca_risk_score=ca["risk_score"], ca_opportunity_score=ca["opportunity_score"], ca_risk_band=ca["band"],
+            ca_gate_a=ca["gate_a"], ca_gate_b=ca["gate_b"], ca_events=ca["events"], ca_tracked_not_scored=ca["tracked"]))
     return out
 
 

@@ -44,7 +44,7 @@ def unique_actions(items, r):
     out, seen = [], []
     for li in sorted(items, key=lambda x: x.item.published):
         et = li.label.event_type
-        if et not in r["corporate_actions"]["base"] and et != "capacity_expansion":
+        if et not in r["corporate_actions"]["severity"] and et != "capacity_expansion":
             continue
         nums = _numbers(li.item.title) or tuple(sorted(w for w in re.findall(r"[a-z]{4,}", li.item.title.lower()))[:6])
         days = cfg["dividend_days"] if et == "dividend" else cfg["other_days"]

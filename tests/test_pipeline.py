@@ -70,8 +70,13 @@ def test_validation_rules():
 def test_corporate_actions_and_sector(tmp_path):
     res = run(tmp_path)
     s = {x.symbol: x for x in res["scores"]}
-    assert s["HDFCBANK"].corporate_action_score == 1.0     # dividend, medium
-    assert s["BPCL"].corporate_action_score == 2.0         # 1.5 * 1.5 = 2.25 clipped to 2
+    # v2.0.0: Corporate Actions is severity x stage x timing x size, Risk (negative/unclear) and Opportunity (positive) combined
+    # separately - a dividend and a buyback are both positive-direction, so they land in Opportunity with Risk at 0, not a single
+    # clipped number.
+    assert s["HDFCBANK"].ca_risk_score == 0.0 and s["HDFCBANK"].ca_opportunity_score > 0
+    assert s["HDFCBANK"].ca_events[0]["event_type"] == "dividend" and s["HDFCBANK"].ca_events[0]["direction"] == "positive"
+    assert s["BPCL"].ca_risk_score == 0.0 and s["BPCL"].ca_opportunity_score > 0
+    assert s["BPCL"].ca_events[0]["event_type"] == "buyback" and s["BPCL"].ca_events[0]["direction"] == "positive"
     assert s["ANGELONE"].sector_sentiment == s["HDFCBANK"].sector_sentiment
     assert s["BPCL"].low_confidence
 
@@ -930,7 +935,10 @@ def _gov_feed_opener():
     return opener, calls
 
 
-def test_governance_pass_finds_old_cpo_exit_but_leaves_sentiment_alone(tmp_path):
+def test_governance_pass_finds_old_cpo_exit_and_v2_lets_it_also_feed_sentiment(tmp_path):
+    """v2.0.0: one article can feed Sentiment, Corporate Actions and Governance all at once - a CPO exit found ONLY by the
+    governance pass (not in the latest-40 headlines) now also pulls the sentiment score, instead of being walled off from it
+    (the walled-off behaviour was the pre-v2.0.0 design; the user asked for events to count everywhere they are relevant)."""
     from sentinelq.ingest.gnews import GoogleNewsRSS
     from sentinelq.models import Holding
     r = load_rubric()
@@ -945,8 +953,8 @@ def test_governance_pass_finds_old_cpo_exit_but_leaves_sentiment_alone(tmp_path)
     assert s_on.governance_score == 92 and [p["event_type"] for p in s_on.governance_penalties] == ["management_exit"]
     assert "Chief Product Officer" in s_on.governance_penalties[0]["headline"]
     assert [x["why"] for x in s_on.governance_ignored if "Kunwar" in x["headline"]]       # the promotion: seen, reported, NOT penalised
-    assert (s_off.company_sentiment, s_off.company_sentiment_raw) == (s_on.company_sentiment, s_on.company_sentiment_raw)   # sentiment identical
-    assert all(li.item.purpose == "governance" for li in on["kept"]["ANGELONE"] if "Chief Product" in li.item.title)
+    assert s_on.company_sentiment_raw < s_off.company_sentiment_raw     # the exit the governance pass found now also pulls sentiment down
+    assert all(li.item.purpose == "governance" for li in on["kept"]["ANGELONE"] if "Chief Product" in li.item.title)   # provenance unchanged
 
 
 def test_governance_selection_dedupes_against_sentiment_set_and_caps():
@@ -1024,7 +1032,7 @@ def test_display_tags_every_step_and_tracks_each_stock(tmp_path):
     for n, name in enumerate(["INPUT", "INGEST", "CLASSIFY", "VALIDATE", "SCORE", "REPORT"], 1):
         assert f"[STEP {n}/6 {name}]" in out, name
     assert "STEP TRACKER" in out and "progress: 1 Input" in out and "governance 100 -20 regulatory action -8 management exit = 72 FLAG" in out
-    log = (tmp_path / "run.log").read_text()                                              # the same record goes to the log file
+    log = (tmp_path / "run.log").read_text(encoding="utf-8")                              # the same record goes to the log file (written as UTF-8 - headlines can carry non-ASCII text)
     assert all(f"[STEP {n}/6 {name}]" in log for n, name in enumerate(["INPUT", "INGEST", "CLASSIFY", "VALIDATE", "SCORE", "REPORT"], 1))
     assert log.count("[STEP 2/6 INGEST]") == len(hold) and log.count("[STEP 5/6 SCORE]") == len(hold)   # once per stock per step
 
