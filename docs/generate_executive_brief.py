@@ -108,6 +108,66 @@ st += [P("A fourth, read-only layer — dividends, buybacks, splits and similar 
          "context but deliberately kept out of all three scores: these do not change what a company is worth, and "
          "including them would distort the signal rather than inform it.", NOTE)]
 
+# ============ What it marks, concretely ============
+st += h1("What specifically gets marked")
+st += [P("The three dimensions are not a vague sentiment reading — each is built from a fixed, named list of things the "
+         "system watches for. What follows is that list in plain terms, so it is clear exactly what drives a score up "
+         "or down rather than treating it as a black box.", BODY)]
+
+st += [P("Sentiment — what counts as strongly positive through strongly negative", H2)]
+rows = [
+    ["Strongly positive", "A sustained run of results beating expectations, raised guidance, or a structural tailwind, "
+     "with no material offsetting bad news in the period."],
+    ["Positive on balance", "A good year with one specific qualifier — a single weak quarter, an execution issue, or a "
+     "valuation caution — that keeps it short of the strongest reading."],
+    ["Neutral / mixed", "Genuinely two-sided — real good news matched by real bad news — or coverage too thin to call "
+     "a direction with confidence. A thin-coverage neutral is flagged as such, not presented as a confident zero."],
+    ["Negative on balance", "A material earnings deterioration, a guidance cut, or a defined adverse event whose "
+     "impact dominates the period, even where some offsetting positives exist."],
+    ["Strongly negative", "Severe or compounding negatives — a large miss stacked with further bad news, not one "
+     "isolated setback."],
+]
+st += [tbl(["Reading", "What produces it"], rows, [95, W - 95])]
+
+st += [P("Governance — the specific events that can cost points, and what does not", H2)]
+rows = [
+    ["Most severe", "A financial restatement; an auditor resigning; the company entering formal insolvency "
+     "proceedings or facing a long trading suspension; a promoter's pledged shares being forcibly sold into the "
+     "market."],
+    ["Serious", "A regulator's final order or settlement (not a mere allegation); a live, unresolved investigation; "
+     "a material, investor-contested related-party transaction."],
+    ["Moderate", "An unplanned departure of a CEO, CFO, company secretary or other senior compliance role; a gap in "
+     "board independence (combined chair/MD roles, too few independent directors); a promoter pledge being created "
+     "at a size judged material."],
+    ["Minor / procedural", "A disclosure lapse or an exchange fine for a procedural breach, scaled by its size — "
+     "never treated as an integrity matter."],
+]
+st += [tbl(["Severity", "Examples"], rows, [78, W - 78])]
+st += [P("Reviewed and explicitly NOT marked down: a scheduled leadership retirement or succession, an ordinary "
+         "board reconstitution, a routine or arm's-length related-party transaction, an investigation that was closed "
+         "or cleared, a scheduled auditor rotation. Each of these is checked against the same list and recorded as "
+         "“reviewed, not penalised” rather than silently ignored — the distinction between a real governance "
+         "concern and routine corporate housekeeping is deliberate, not an oversight.", NOTE)]
+
+st += [P("Corporate Actions — the full range tracked, by severity", H2)]
+rows = [
+    ["Most severe", "Insolvency proceedings or compulsory delisting; a demerger or a merger that changes what the "
+     "business is."],
+    ["High", "A takeover or open offer that changes who controls the company; a stock split or bonus issue (tracked "
+     "for its effect on reported data, not treated as a risk event in itself)."],
+    ["Material", "A rights issue; a promoter pledge being created or called; a dilutive capital raise (a preferential "
+     "issue, a institutional placement, or similar); an auditor or senior-management exit (counted here as well as "
+     "under Governance, since the same event carries both a governance and a capital-markets dimension)."],
+    ["Moderate", "A buyback; a lock-in expiry that will release a block of shares for sale."],
+    ["Routine", "A regular dividend; a name, symbol or ISIN change; a change of financial year-end; a routine AGM/EGM "
+     "resolution; administrative notices (registrar changes, trading-window closures) that carry essentially no "
+     "signal on their own."],
+]
+st += [tbl(["Severity", "Examples"], rows, [78, W - 78])]
+st += [P("A small number of event types are tracked on the calendar for completeness (for example an index addition "
+         "or removal, or an exchange surveillance action) but deliberately excluded from the score itself, since the "
+         "rules distinguish a formal corporate action from a market-structure disclosure.", NOTE)]
+
 # ============ How it works ============
 st += h1("How it works")
 st += [P(
@@ -135,25 +195,48 @@ rows = [["1. Input", "Resolve the exact company identity (name, ticker, sector) 
 st += [tbl(["Stage", "What happens"], rows, [62, W - 62])]
 
 # ============ Why it can be trusted ============
-st.append(KeepTogether(h1("Why the output can be trusted")))
+st.append(KeepTogether(h1("How a score is actually built")))
+st += [P("The arithmetic is simple on purpose, and it is worth showing directly rather than asserting it is sound. "
+         "Two illustrations, using round hypothetical numbers — not a real company:", BODY)]
+
+st += [P("Governance: a running total, not a rolling average", H2)]
+st += [P(
+    "Every company starts at 100. A verified adverse event subtracts a fixed amount set in advance by its type — an "
+    "auditor's resignation costs 20 points, a regulator's settled order costs 20, a procedural exchange fine costs "
+    "5 to 10 depending on its size. Say a company has a regulator's order (-20) and, eight months later, an unplanned "
+    "CFO exit (-8): the running total is 100 - 20 - 8 = 72. Old penalties do not vanish, but they do fade — a penalty "
+    "holds at full strength for six months, then tapers in a straight line to half its value by twelve months, so an "
+    "integrity event from last year still shows, just more lightly than one from last month. Nothing is estimated or "
+    "smoothed; the number is always exactly '100, minus this list of dated events, each worth a fixed, published "
+    "amount.'", BODY)]
+
+st += [P("Corporate actions: one serious event is never diluted by several small ones", H2)]
+st += [P(
+    "Each event gets a 0-10 score built from four factors multiplied together: how dangerous that type of event is "
+    "in the worst case, how far along it is (a board merely discussing a capital raise counts for far less than one "
+    "that has formally approved it), how recent it is, and how large this instance is. Say a company in a given year "
+    "has a capital raise scored 6.5 and a routine administrative notice scored 0.3. These are not averaged — "
+    "averaging would let the 0.3 water down the 6.5 — and they are not added — summing lets unrelated minor items "
+    "stack past any sensible ceiling. Instead each is treated as a chance out of ten that it causes real harm, and "
+    "the two are combined as the chance that at least one of them does: here, that works out to a combined score of "
+    "6.6 out of 10 — barely above the single largest event, exactly as it should be, because one real risk dominates "
+    "and a minor administrative item adds almost nothing.", BODY)]
+
+st += [P("Both calculations are reproducible by hand from the published rules and the dated evidence list behind "
+         "them — there is no step where a model estimates, smooths, or rounds a result.", NOTE)]
+
+st += h1("Why the output can be trusted")
 rows = [
-    ["Deterministic scoring", "The scoring rules live in one published file, separate from the AI. Given the same "
-     "labelled evidence, the system produces the identical score every time — nothing is re-derived by a model at "
-     "report time, and nothing drifts between runs."],
-    ["Full traceability", "Every score is backed by a visible list of the specific articles that drove it, each with "
-     "its date, headline, individual assessment, and link. Nothing is a black-box average — an analyst can open any "
-     "score and see exactly why it is what it is."],
-    ["Source-strength transparency", "Each piece of evidence is weighted by how many independent outlets reported it "
-     "and how reliable those outlets are, on a fixed, editable scale. A claim backed by a single low-reliability "
-     "source is explicitly flagged as such in the output, rather than presented with the same confidence as a "
-     "well-corroborated one."],
-    ["Nothing proceeds unverified", "Adverse governance events pass a verification check before they can cost any "
-     "points — confirming the event genuinely concerns the company itself, not a peer, a counterparty, or an "
-     "industry-wide rule that happens to share a keyword. Items that fail this check are visibly logged as reviewed "
-     "and excluded, not silently dropped."],
-    ["Nothing silently fails", "An article that cannot be read, a label that doesn't parse, a stock that cannot be "
-     "resolved — every one of these produces a recorded reason in the output, never a quiet omission. If more than a "
-     "small fraction of a run fails, the whole run stops rather than publishing on unreliable foundations."],
+    ["Full traceability", "Every score is backed by the specific, dated articles that drove it, each with its own "
+     "individual assessment and a working link. Any score can be opened down to the evidence behind it."],
+    ["Source-strength is shown, not assumed", "Evidence is weighted by how many outlets reported it and how "
+     "reliable those outlets are. A claim resting on one low-reliability source is flagged as such in the output, "
+     "not presented with the same confidence as a well-corroborated one."],
+    ["Verification before penalty", "An adverse governance event is checked to confirm it concerns the company "
+     "itself — not a peer, a counterparty, or an industry-wide rule sharing a keyword — before it can cost a point. "
+     "Items that fail this check are logged as reviewed and excluded, not dropped silently."],
+    ["Failures are recorded, never hidden", "An unreadable article, a malformed label, an unresolved stock name — "
+     "each produces a recorded reason. A run with too many failures stops rather than publishing on shaky evidence."],
 ]
 for name, body in rows:
     st.append(P(f"<b>{name}.</b> {body}", BULLET))
