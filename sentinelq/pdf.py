@@ -267,6 +267,12 @@ def build_pdf(path: Path, res: dict, rubric, narr: dict, observations: list[dict
         sent = paras(nr["sentiment_rationale"]) + (paras(nr["coverage_note"]) if nr.get("coverage_note") else [])
         gov = paras(nr["governance_rationale"])
         ca_txt = paras(nr.get("ca_rationale") or "No corporate-action events scored in the lookback.")
+        weak = [e for e in list(s.ca_events) + list(s.ca_gate_a) + list(s.ca_gate_b)
+                if e.get("n_sources") == 1 and e.get("max_tier") in ("T3", "T4")]
+        if weak:                                     # deterministic - never depends on the narrator remembering to say it
+            names = ", ".join(dict.fromkeys(f"{e['event_type'].replace('_', ' ')} ({e['date']})" for e in weak))
+            ca_txt += paras(f"Sourcing note: {names} relied on a single lower-tier outlet - its date and facts have not been "
+                            f"corroborated elsewhere and should be treated as unconfirmed, not settled fact.")
         head = [Paragraph(rl(s.name), ParagraphStyle("hold0", parent=HOLD, spaceBefore=0 if first else 20)), line]
         if s.coverage_map:
             head.append(Paragraph(f'<font color="{MUTED}">{rl("Coverage: " + s.coverage_map)}</font>', SUBNOTE))
