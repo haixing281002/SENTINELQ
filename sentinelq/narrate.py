@@ -15,6 +15,27 @@ from .models import LabelledItem, StockScore
 
 CA_TYPES = {"dividend", "buyback", "dilution", "capacity_expansion", "open_offer_takeover", "lock_in_expiry", "pledge", "pledge_invocation", "insolvency_admission"}
 
+# Calibrate how explicit/intense the written risk must be, by band - never printed, never named in the output (the
+# rule against stating a score/label/band still holds), just steering so a Flag/Exit holding doesn't read in the
+# same measured register as a Clean/Log one. Without this, severity got flattened: a severe item and a mild one
+# ended up sounding equally matter-of-fact.
+_GOV_TIER = {
+    "Clean": "no material governance risk found here - keep this brief and matter-of-fact, do not manufacture concern where none exists",
+    "Watch": "a real but contained concern - name it plainly and say what would make it worse, calibrated to 'worth monitoring', not alarmed",
+    "Flag": ("the most severe governance tier this scorecard assigns - this is NOT a minor item. Be explicit about the actual "
+             "downside for a holder (loss of confidence, forced selling, management distraction, a pattern likely to recur) and "
+             "why it would warrant real caution before adding risk. Do not undersell this with soft, hedged language."),
+}
+_CA_TIER = {
+    "Log": "negligible for an entry decision - keep this brief, do not dramatize",
+    "Watch": "worth noting but not yet a reason to hesitate - name it plainly without dramatizing",
+    "Review": "a real reason to pause before adding new money - be specific about what could go wrong and roughly how large the hit (dilution %, cost, timeline) could be",
+    "Act": ("serious enough that a holder should already be reassessing position size or hedging - be explicit about the "
+            "downside and the timeline, do not undersell it with soft language"),
+    "Exit": ("the most severe tier this scorecard assigns - make clear this is a real reason to hold off entering entirely "
+             "until it resolves, not just a line item to note in passing"),
+}
+
 SYSTEM = (
     "You write the analyst commentary for an investment-committee RISK-REVIEW scorecard covering 75+ holdings at once. "
     "The IC is scanning many stocks in one sitting, not reading an article about one. House style: plain, factual, precise, "
@@ -70,29 +91,42 @@ TOOL = {
                 "says nothing a figure could not say better. Cite a supporting figure for the main driver, for the main "
                 "offset, and for at least one secondary point too (three to four figures total across the rationale is "
                 "right here, more than the other two fields, since sentiment carries the most evidence); still never "
-                "stack more than one figure into the same clause. Give the main positive driver its own sentence, the "
-                "main offset its own sentence, and close with how they net out. A sentence that names three events and "
-                "two numbers in one breath has failed the task; split it. No dates unless the timing itself is the "
-                "reason. NEVER state any score, mean, band, rating, points or label (no '+1', no 'weighted mean', no "
-                "'band'). Use commas and periods, never a dash.")},
+                "stack more than one figure into the same clause. STRUCTURE FOLLOWS 'sentiment_how_scored.read_balance', "
+                "NOT a fixed template - there is no rule that the positive side always goes first. If read_balance says "
+                "the read is dominant positive, lead with the positive driver. If it says the read is closely contested "
+                "or weighed toward neutral, LEAD with what is dragging the score down and say outright that the positive "
+                "case is not enough to clearly outweigh it (e.g. 'the positive case here is real but not decisive' or "
+                "'what is holding this back matters more than what is working') - do not open with the positive story "
+                "and only mention the drag as an afterthought when the actual balance is this close. Every holding's "
+                "opening sentence should read differently depending on where it actually sits, not identically "
+                "structured 'strong growth, offset by X' regardless of how close the real balance is. Whichever side "
+                "leads, give the other its own sentence, and close with how they net out and HOW DECISIVELY (a landslide "
+                "versus a close call are different endings). A sentence that names three events and two numbers in one "
+                "breath has failed the task; split it. No dates unless the timing itself is the reason. NEVER state any "
+                "score, mean, band, rating, points or label (no '+1', no 'weighted mean', no 'band'). Use commas and "
+                "periods, never a dash.")},
             "ca_rationale": {"type": "string", "description": (
                 "2-3 full sentences (~85-105 words), written as an EXPLANATION for the FM, not a news recap or a list of "
-                "events. For each live corporate action: say plainly what it is and why it matters for an entry decision "
-                "today (what it could cost, roughly when, how likely it is to still be live) in its own sentence, not "
-                "chained to other events with commas. If there is more than one live event, give each its moment, in order "
-                "of how much it matters; do not try to fit them all into a single crowded sentence. Or state plainly that "
-                "it is benign, already behind the stock, with nothing live. NEVER state any score, band, severity number "
-                "or multiplier, and never mention sourcing or outlet reliability (that lives in the Excel appendix, not "
-                "here). If there are none, say plainly 'No corporate-action concern for entry.' Use commas and periods, "
-                "never a dash.")},
+                "events. Match your intensity to 'ca_risk_emphasis' - a Log/Watch-tier item gets a plain, brief mention, "
+                "but a Review/Act/Exit-tier item needs you to actually spell out the risk: what could go wrong, roughly "
+                "how large the hit could be (dilution %, cost, lost optionality), and over what timeframe, not just 'this "
+                "is live, factor it in.' For each live corporate action: say plainly what it is and why it matters for an "
+                "entry decision today, in its own sentence, not chained to other events with commas. If there is more "
+                "than one live event, give each its moment, in order of how much it matters; do not try to fit them all "
+                "into a single crowded sentence. Or state plainly that it is benign, already behind the stock, with "
+                "nothing live. NEVER state any score, band, severity number or multiplier, and never mention sourcing or "
+                "outlet reliability (that lives in the Excel appendix, not here). If there are none, say plainly 'No "
+                "corporate-action concern for entry.' Use commas and periods, never a dash.")},
             "governance_rationale": {"type": "string", "description": (
                 "2-3 full sentences (~55-70 words), written as an EXPLANATION of the RISK this stock's governance history "
-                "poses GOING FORWARD, not a list of events. Say plainly what kind of risk it is, if any (an ongoing "
-                "overhang, something resolved and no longer live, or clean) and why that matters for a holder, in everyday "
-                "language, before naming the specific item. NEVER state any score, penalty number or label. If nothing "
-                "adverse: 'No governance risk identified in the lookback.' Mention routine items reviewed and deliberately "
-                "not treated as adverse only if relevant, and explain briefly why they did not count. Use commas and "
-                "periods, never a dash.")},
+                "poses GOING FORWARD, not a list of events. Match your intensity to 'governance_risk_emphasis' - a Clean "
+                "holding gets a brief, matter-of-fact line, but a Flag-tier holding needs you to actually spell out the "
+                "consequence for a holder (forced selling, management credibility, a pattern likely to recur), not just "
+                "name the event and move on. Say plainly what kind of risk it is, if any, and why that matters for a "
+                "holder, in everyday language, before naming the specific item. NEVER state any score, penalty number or "
+                "label. If nothing adverse: 'No governance risk identified in the lookback.' Mention routine items "
+                "reviewed and deliberately not treated as adverse only if relevant, and explain briefly why they did not "
+                "count. Use commas and periods, never a dash.")},
             "one_line_read": {"type": "string", "description": "ALWAYS fill this (never empty): 2 to 5 words naming what drives the year, e.g. 'Confirmed compounder', 'Momentum intact', 'Regulatory scar; strong operations'."},
             "key_corporate_action": {"type": "string", "description": "Terse list of the key corporate actions among the supplied corporate-action events only, e.g. 'Div Rs 46 final + Rs 20 interim' or 'Rs 5,633cr buyback @ Rs 12,000 (open 1-Jul)'. Write 'None' if there are none."},
             "coverage_note": {"type": "string", "description": "Only if coverage is thin or sources conflict AND the sentiment rationale does not already say so; otherwise return an empty string. Never repeat what the rationale states. Keep to one short clause if used."},
@@ -118,15 +152,20 @@ def fmt_sent(x):
 def evidence_payload(s: StockScore, items: list[LabelledItem], as_of=None, rubric=None) -> dict:
     """What the commentary writer sees. No scores (they are shown elsewhere, not narrated), and nothing about data-quarantined
     corporate actions (splits, bonuses, ISIN changes...): those carry no economic signal and are kept out of the written report.
+    Includes 'governance_risk_emphasis' and 'ca_risk_emphasis' - plain-English calibration (derived from, but never equal to,
+    the band) so a Flag/Exit holding is written with real weight instead of the same measured register as a Clean/Log one.
 
     When as_of/rubric are supplied, also includes 'sentiment_how_scored' - the same top-driver arithmetic (drivers()) that
     feeds the Excel 'Sentiment - why' column, so the written rationale names the real events behind the score rather than
     re-deriving (and possibly disagreeing with) its own reading of the raw evidence list."""
     hidden = {e["url"] for e in s.ca_gate_b}
+    gate_a_band = bool(s.ca_gate_a)   # Gate A overrides straight to Exit regardless of the arithmetic band
     payload = {
         "company": s.name, "sector": s.sector,
         "sentiment_status": "insufficient data" if s.company_sentiment is None else "ok",
         "evidence_span": f"{s.evidence_first}..{s.evidence_last}" if s.evidence_first else "none",
+        "governance_risk_emphasis": _GOV_TIER.get(s.governance_label, ""),
+        "ca_risk_emphasis": _CA_TIER.get("Exit" if gate_a_band else s.ca_risk_band, ""),
         "ca_events": [{"event": e["event_type"].replace("_", " "), "date": e["date"], "headline": e["headline"],
                        "direction": e["direction"], "stage": e["stage"]}
                       for e in sorted(s.ca_events, key=lambda x: -x["score"])],
@@ -146,12 +185,28 @@ def evidence_payload(s: StockScore, items: list[LabelledItem], as_of=None, rubri
         pos, neg, facts = drivers(items, as_of, rubric)
         ev_line = lambda li: {"event": li.label.event_type.replace("_", " "),
                               "what": (li.label.gist or li.item.snippet or li.item.title or "")[:160]}
+        pos_total = sum(p for _, p in pos)
+        neg_total = sum(-p for _, p in neg)
+        denom = pos_total + neg_total
+        pos_share = pos_total / denom if denom > 0 else 0.5
+        if pos_share >= 0.75:
+            balance = "clearly dominant positive: lead with the positive driver"
+        elif pos_share >= 0.58:
+            balance = "net positive but meaningfully offset: lead with the positive driver, give the offset real weight"
+        elif pos_share >= 0.42:
+            balance = ("closely contested, weighed toward neutral: lead with what is dragging the score down, not "
+                       "the positive case, and be explicit that the positive side does not clearly dominate")
+        elif pos_share >= 0.25:
+            balance = "net negative with a real positive case: lead with the negative/offsetting side"
+        else:
+            balance = "clearly dominant negative: lead with the negative side"
         payload["sentiment_how_scored"] = {
             "positive_articles": facts.get("n_pos", 0), "neutral_articles": facts.get("n_zero", 0),
             "negative_articles": facts.get("n_neg", 0),
             "recent_3m_share_of_weight": round(facts["recent"], 2) if facts.get("recent") is not None else None,
             "top_events_pushing_up": [ev_line(li) for li, _ in pos[:4]],
             "top_events_pushing_down": [ev_line(li) for li, _ in neg[:4]],
+            "read_balance": balance,
         }
     return payload
 
