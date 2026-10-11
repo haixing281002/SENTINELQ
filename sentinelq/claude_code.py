@@ -100,11 +100,17 @@ def run_claude(prompt: str, model: str | None = None, timeout: int = 600, schema
 
 
 def extract_json(text: str, opener: str):
-    close = "]" if opener == "[" else "}"
-    a, b = text.find(opener), text.rfind(close)
-    if a < 0 or b < a:
+    """Decode exactly one JSON value starting at the first `opener`, the same way parse_labels() below does for
+    label replies. Finding the LAST closer instead (the old approach) breaks the moment the model appends any
+    trailing text after the JSON - that one bad reply used to take the whole batch down with a JSONDecodeError."""
+    a = text.find(opener)
+    if a < 0:
         raise ValueError("no JSON found in model reply")
-    return json.loads(text[a:b + 1])
+    try:
+        obj, _ = json.JSONDecoder().raw_decode(text, a)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"no valid JSON found in model reply: {e}") from e
+    return obj
 
 
 def parse_labels(text: str) -> list[dict]:

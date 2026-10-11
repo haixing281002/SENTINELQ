@@ -159,15 +159,25 @@ def evidence_payload(s: StockScore, items: list[LabelledItem], as_of=None, rubri
 _HIDE = ("quarantin", "gate b", "bonus", "stock split", "share split", "split and bonus", "bonus and split")
 
 # Hard backstop for the per-holding budget (sentiment gets the most room since it draws on the most evidence) - word
-# count, not char count, so it cuts at a word boundary rather than mid-token.
+# count, not char count, so it cuts at a sentence boundary rather than mid-sentence.
 _MAX_WORDS = {"sentiment_rationale": 170, "governance_rationale": 85, "ca_rationale": 120}
 
 
 def _cap_words(text: str, n: int) -> str:
-    words = text.split()
-    if len(words) <= n:
+    """Trim to whole sentences totalling at most n words. Never cuts mid-sentence: if even the first sentence alone
+    is over the cap, that one sentence is kept whole rather than mangled (a slightly long sentence beats a broken
+    one - this already cost a real holding a nonsense 'but on.' ending once)."""
+    if len(text.split()) <= n:
         return text
-    return " ".join(words[:n]).rstrip(".,;:") + "."
+    sentences = re.split(r"(?<=[.!?])\s+", text)
+    kept, count = [], 0
+    for s in sentences:
+        wc = len(s.split())
+        if kept and count + wc > n:
+            break
+        kept.append(s)
+        count += wc
+    return " ".join(kept) if kept else text
 
 
 _DASH_SEP = re.compile(r"\s*[–—]\s*|\s+-\s+")   # em dash, en dash, or a hyphen used as a spaced clause break
