@@ -498,7 +498,8 @@ def ca_event_score(li: LabelledItem, r: Rubric, as_of: date) -> dict | None:
     gate_a = (et in ca["gate_a_hard_exit"]["event_types"]
               or (et == "auditor_resignation" and li.label.severity == ca["gate_a_hard_exit"]["auditor_resignation_requires_severity"]))
     gate_b = et in ca["gate_b_data_quarantine"]["event_types"]
-    tracked_only = et in ca["disclosure_tracked_not_scored"]["event_types"]
+    stage_excluded = stage in ca.get("stage_excluded_from_scoring", {}).get("stages", []) and not gate_a and not gate_b
+    tracked_only = et in ca["disclosure_tracked_not_scored"]["event_types"] or stage_excluded
     return {"event_type": et, "severity": sev, "stage": stage, "stage_mult": stage_mult, "timing_mult": round(timing_mult, 3),
             "timing_basis": timing_basis, "size_mult": size_mult, "size_basis": size_basis, "raw": round(raw, 2), "score": score,
             "direction": direction, "gate_a": gate_a, "gate_b": gate_b, "tracked_only": tracked_only,

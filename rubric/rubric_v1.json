@@ -347,9 +347,12 @@
       "board_intimation": 0.3,
       "board_approved": 0.6,
       "approval_obtained": 0.8,
-      "completed": 1.0,
       "_default_when_unstated": "board_approved",
-      "_note": "approval_obtained = shareholder or regulatory approval obtained; completed = record date fixed or passed"
+      "_note": "approval_obtained = shareholder or regulatory approval obtained. There is no 'completed' multiplier any more (was 1.0) - see stage_excluded_from_scoring: a completed action is no longer scored at all, not scored at full weight."
+    },
+    "stage_excluded_from_scoring": {
+      "stages": ["completed"],
+      "_note": "2026-10-10 rubric change: a completed corporate action has already happened, so there is no forward entry/exit decision left for it to inform - no point scoring it. These events stay visible in Corporate Actions - Events (the calendar is never incomplete) but are excluded from the Risk/Opportunity arithmetic, same mechanism as Gate B. Does NOT apply to Gate A event types (insolvency_admission, pledge_invocation, an integrity-severity auditor_resignation) - a completed insolvency or an executed pledge invocation is exactly when the hard-exit override matters most, so those always score/override regardless of stage."
     },
     "timing": {
       "upcoming_over_60d": 0.5,
