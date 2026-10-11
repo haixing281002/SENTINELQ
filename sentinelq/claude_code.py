@@ -258,12 +258,12 @@ class ClaudeCodeNarrator:
         self.model = model
         self.model_id = f"claude-code:{model or 'default'}"
 
-    def holding(self, s, items):
+    def holding(self, s, items, as_of=None, rubric=None):
         keys = list(NARR_TOOL["input_schema"]["properties"])
         prompt = (NARR_SYSTEM.replace("Answer by calling the tool.", "") +
                   "\nReply with ONLY a JSON object with keys " + ", ".join(keys) + " (field guidance: " +
                   json.dumps({k: v.get("description", "") for k, v in NARR_TOOL["input_schema"]["properties"].items()}) +
-                  ").\n\nDATA:\n" + json.dumps(evidence_payload(s, items), default=str))
+                  ").\n\nDATA:\n" + json.dumps(evidence_payload(s, items, as_of, rubric), default=str))
         out = extract_json(run_claude(prompt, self.model), "{")
         for k in keys:
             out.setdefault(k, "")

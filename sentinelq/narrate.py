@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import re
 from collections import Counter
 from typing import Protocol
 
@@ -15,16 +16,39 @@ from .models import LabelledItem, StockScore
 CA_TYPES = {"dividend", "buyback", "dilution", "capacity_expansion", "open_offer_takeover", "lock_in_expiry", "pledge", "pledge_invocation", "insolvency_admission"}
 
 SYSTEM = (
-    "You write the analyst commentary for an investment-committee scorecard (house style: plain, factual, precise, "
-    "no hype, no advice). Scores are computed separately by fixed rules and shown elsewhere in the report; your text "
-    "explains the evidence in words and NEVER states a score, band, label, mean, points or penalty number. Use ONLY the evidence rows supplied (each has a date, headline, label and URL); "
-    "add no facts from memory. Cite dates in the form 30-Apr-26 and figures exactly as they appear in the evidence. "
-    "Write 'Rs' for rupees (never the rupee symbol). If evidence is thin or sources conflict, say so explicitly in the "
-    "rationale itself, as a plain statement about coverage (for example 'only two dated items were retrieved'). "
-    "PRICE RULE: never mention share-price moves, 52-week highs, rallies or sell-offs in the sentiment rationale (price is context only; if essential, wrap the sentence in [context]). "
-    "STYLE RULES: write the finished report text, never commentary about your inputs - do not say 'the evidence', 'the facts "
+    "You write the analyst commentary for an investment-committee RISK-REVIEW scorecard covering 75+ holdings at once. "
+    "The IC is scanning many stocks in one sitting, not reading an article about one. House style: plain, factual, precise, "
+    "no hype, no advice. Scores are computed separately by fixed rules and shown in colour right next to your text; your job "
+    "is to explain WHY the score landed where it did (the mechanism, grounded in the real events, not an abstraction and not "
+    "a bare chronology), and you must NEVER state a score, band, label, mean, points or penalty number (that is already "
+    "shown). Use ONLY the evidence rows supplied; add no facts from memory. "
+    "EXPLAIN, DO NOT LIST: this is the most important rule and the one you are most likely to break. Write the way you would "
+    "actually explain the stock out loud to a fund manager who has thirty seconds, not a research note stuffed with every "
+    "number you have. A sentence that packs in three figures and two event names back to back is a LIST wearing a sentence's "
+    "clothes, not an explanation, and it fails this task even if every fact in it is true. For each point: say what happened "
+    "in plain words, then say what it means or why it matters, in a separate clause or sentence. Pick the one or two facts "
+    "that actually carry the point and drop the rest; a reader should finish a sentence knowing what to think, not just what "
+    "occurred. Never chain three or more distinct events together with commas or semicolons as a way to fit more in; give the "
+    "two or three things that matter most their own sentence each, in order of how much they matter. "
+    "DO NOT write a diary-style recap ('on 5-Jun the company announced..., then on 12-Jul...') and do not write a numbers "
+    "dump ('AUM grew 26%, profit rose 22%, GNPA was 1.27%, and brokerages upgraded...'). Instead: 'the business is growing "
+    "fast and profitably, which is what is driving the score up' - the kind of sentence a busy person actually absorbs - "
+    "then, separately, the one number that best proves it, only if a number is needed at all. "
+    "OMIT DATES by default; cite one only when the timing itself is the reason for the read (an event so recent it dominates, "
+    "or a corporate action with a near-term effective date). Cite at most one figure per sentence, and only when the size of "
+    "the number is itself the point, not as decoration or proof-by-volume. Write 'Rs' for rupees (never the rupee symbol). If "
+    "evidence is thin, say so in one short clause. "
+    "PRICE RULE: never mention share-price moves, 52-week highs, rallies or sell-offs (price is context only). "
+    "PUNCTUATION RULE: never use an em dash, en dash, or a hyphen surrounded by spaces as a clause break; use a comma, "
+    "semicolon or period instead. A plain hyphen inside a compound word (non-executive, two-wheeler, one-off) is fine; a "
+    "dash standing in for 'and', 'but' or a pause is not. "
+    "STYLE RULES: write the finished report text, never commentary about your inputs; do not say 'the evidence', 'the facts "
     "supplied', 'rows', 'payload' or 'provided'. Never print URLs. Write event types as words ('regulatory action', not "
-    "regulatory_action). Write dates without a leading zero (5-Jun-26). Use a real minus sign or plain hyphen for negatives (-20). Answer by calling the tool."
+    "regulatory_action). Use a real minus sign or plain hyphen for negatives (-20). "
+    "LENGTH: sentiment, governance and corporate actions all get real room now (see each field's guidance below), but that "
+    "room is for explaining clearly, not for citing more facts. If you are tempted to add another clause to an already-long "
+    "sentence, stop and start a new sentence instead, or cut the fact. No filler, no hedging, no restating the same point "
+    "twice. Answer by calling the tool."
 )
 
 TOOL = {
@@ -34,24 +58,44 @@ TOOL = {
         "type": "object",
         "properties": {
             "sentiment_rationale": {"type": "string", "description": (
-                "Two short paragraphs separated by a blank line. Paragraph 1: the positive case with dated, sourced facts and the "
-                "company's own figures (growth %, Rs crore, guidance, broker views). Paragraph 2: the offsets, or the absence of "
-                "offsets, in the twelve-month window, ending with one sentence on why the year reads the way it does. NEVER state "
-                "any SentinelQ score, mean, band, rating, points or label - no '+1', no 'weighted mean', no 'band'. Explain in words.")},
+                "4-5 full sentences (~130-160 words) on WHY the sentiment score landed where it did, written as an "
+                "EXPLANATION, not a list of facts, in a FORMAL institutional register (this is IC material, not a casual "
+                "briefing note - avoid conversational phrasing like 'big enough to weigh on the stock' or 'the growth "
+                "story'; write the way a credit or equity research note would). Use 'sentiment_how_scored' (the same "
+                "figures behind the Excel 'Sentiment - why' column) to find the real top_events_pushing_up and "
+                "top_events_pushing_down, and translate them into prose: state what kind of year the company had and why "
+                "(sustained demand growth, a one-off setback, a structural concern), THEN substantiate it with a figure "
+                "(a growth rate, a profit number, a deal size). Open directly with the substantive point, never with a "
+                "generic topic sentence ('Business momentum is the dominant theme here', 'This was a strong year') that "
+                "says nothing a figure could not say better. Cite a supporting figure for the main driver, for the main "
+                "offset, and for at least one secondary point too (three to four figures total across the rationale is "
+                "right here, more than the other two fields, since sentiment carries the most evidence); still never "
+                "stack more than one figure into the same clause. Give the main positive driver its own sentence, the "
+                "main offset its own sentence, and close with how they net out. A sentence that names three events and "
+                "two numbers in one breath has failed the task; split it. No dates unless the timing itself is the "
+                "reason. NEVER state any score, mean, band, rating, points or label (no '+1', no 'weighted mean', no "
+                "'band'). Use commas and periods, never a dash.")},
             "ca_rationale": {"type": "string", "description": (
-                "One to two short paragraphs on the corporate actions that matter, SEPARATE from sentiment and governance even where "
-                "an event also appears there: what happened, how advanced it is (announced / board-approved / approved / completed), "
-                "how recent, and how large, in words. NEVER state any score, band, severity number or multiplier. Only discuss the "
-                "corporate-action events supplied; do not mention anything else. If any event has 'single_lower_tier_source' true, say "
-                "it was reported by a single lower-tier outlet, so its date is unconfirmed. If there are no corporate-action events, "
-                "say so plainly.")},
+                "2-3 full sentences (~85-105 words), written as an EXPLANATION for the FM, not a news recap or a list of "
+                "events. For each live corporate action: say plainly what it is and why it matters for an entry decision "
+                "today (what it could cost, roughly when, how likely it is to still be live) in its own sentence, not "
+                "chained to other events with commas. If there is more than one live event, give each its moment, in order "
+                "of how much it matters; do not try to fit them all into a single crowded sentence. Or state plainly that "
+                "it is benign, already behind the stock, with nothing live. NEVER state any score, band, severity number "
+                "or multiplier, and never mention sourcing or outlet reliability (that lives in the Excel appendix, not "
+                "here). If there are none, say plainly 'No corporate-action concern for entry.' Use commas and periods, "
+                "never a dash.")},
             "governance_rationale": {"type": "string", "description": (
-                "One to three short paragraphs. If adverse governance events were found, say which events and their dates, and why "
-                "they matter. If none: 'No adverse governance events are present in the lookback.' Mention routine items that were "
-                "reviewed and deliberately not treated as adverse, and why. NEVER state any score, penalty number or label.")},
+                "2-3 full sentences (~55-70 words), written as an EXPLANATION of the RISK this stock's governance history "
+                "poses GOING FORWARD, not a list of events. Say plainly what kind of risk it is, if any (an ongoing "
+                "overhang, something resolved and no longer live, or clean) and why that matters for a holder, in everyday "
+                "language, before naming the specific item. NEVER state any score, penalty number or label. If nothing "
+                "adverse: 'No governance risk identified in the lookback.' Mention routine items reviewed and deliberately "
+                "not treated as adverse only if relevant, and explain briefly why they did not count. Use commas and "
+                "periods, never a dash.")},
             "one_line_read": {"type": "string", "description": "ALWAYS fill this (never empty): 2 to 5 words naming what drives the year, e.g. 'Confirmed compounder', 'Momentum intact', 'Regulatory scar; strong operations'."},
-            "key_corporate_action": {"type": "string", "description": "Terse list of the key corporate actions among the supplied corporate-action events only, e.g. 'Div Rs 46 final + Rs 20 interim' or 'Rs 5,633cr buyback @ Rs 12,000 (open 1-Jul)'. An em dash if none."},
-            "coverage_note": {"type": "string", "description": "Only if coverage is thin or sources conflict AND the sentiment rationale does not already say so; otherwise return an empty string. Never repeat what the rationale states."},
+            "key_corporate_action": {"type": "string", "description": "Terse list of the key corporate actions among the supplied corporate-action events only, e.g. 'Div Rs 46 final + Rs 20 interim' or 'Rs 5,633cr buyback @ Rs 12,000 (open 1-Jul)'. Write 'None' if there are none."},
+            "coverage_note": {"type": "string", "description": "Only if coverage is thin or sources conflict AND the sentiment rationale does not already say so; otherwise return an empty string. Never repeat what the rationale states. Keep to one short clause if used."},
         },
         "required": ["sentiment_rationale", "governance_rationale", "ca_rationale", "one_line_read", "key_corporate_action", "coverage_note"],
         "additionalProperties": False,
@@ -71,17 +115,20 @@ def fmt_sent(x):
     return "n/a" if x is None else f"{x:+d}" if x else "0"
 
 
-def evidence_payload(s: StockScore, items: list[LabelledItem]) -> dict:
+def evidence_payload(s: StockScore, items: list[LabelledItem], as_of=None, rubric=None) -> dict:
     """What the commentary writer sees. No scores (they are shown elsewhere, not narrated), and nothing about data-quarantined
-    corporate actions (splits, bonuses, ISIN changes...): those carry no economic signal and are kept out of the written report."""
+    corporate actions (splits, bonuses, ISIN changes...): those carry no economic signal and are kept out of the written report.
+
+    When as_of/rubric are supplied, also includes 'sentiment_how_scored' - the same top-driver arithmetic (drivers()) that
+    feeds the Excel 'Sentiment - why' column, so the written rationale names the real events behind the score rather than
+    re-deriving (and possibly disagreeing with) its own reading of the raw evidence list."""
     hidden = {e["url"] for e in s.ca_gate_b}
-    return {
+    payload = {
         "company": s.name, "sector": s.sector,
         "sentiment_status": "insufficient data" if s.company_sentiment is None else "ok",
         "evidence_span": f"{s.evidence_first}..{s.evidence_last}" if s.evidence_first else "none",
         "ca_events": [{"event": e["event_type"].replace("_", " "), "date": e["date"], "headline": e["headline"],
-                       "direction": e["direction"], "stage": e["stage"],
-                       "single_lower_tier_source": e["n_sources"] == 1 and e["max_tier"] in ("T3", "T4")}
+                       "direction": e["direction"], "stage": e["stage"]}
                       for e in sorted(s.ca_events, key=lambda x: -x["score"])],
         "ca_hard_override": [{"event": e["event_type"].replace("_", " "), "date": e["date"], "headline": e["headline"]} for e in s.ca_gate_a],
         "adverse_governance_events": [{"event": p["event_type"].replace("_", " "), "date": p["date"], "headline": p["headline"]}
@@ -94,14 +141,48 @@ def evidence_payload(s: StockScore, items: list[LabelledItem]) -> dict:
                       "governance_flag": li.label.governance_flag, "historical": li.label.historical}
                      for li in sorted(items, key=lambda x: x.item.published, reverse=True) if li.item.url not in hidden],
     }
+    if as_of is not None and rubric is not None and s.company_sentiment is not None:
+        from .score import drivers
+        pos, neg, facts = drivers(items, as_of, rubric)
+        ev_line = lambda li: {"event": li.label.event_type.replace("_", " "),
+                              "what": (li.label.gist or li.item.snippet or li.item.title or "")[:160]}
+        payload["sentiment_how_scored"] = {
+            "positive_articles": facts.get("n_pos", 0), "neutral_articles": facts.get("n_zero", 0),
+            "negative_articles": facts.get("n_neg", 0),
+            "recent_3m_share_of_weight": round(facts["recent"], 2) if facts.get("recent") is not None else None,
+            "top_events_pushing_up": [ev_line(li) for li, _ in pos[:4]],
+            "top_events_pushing_down": [ev_line(li) for li, _ in neg[:4]],
+        }
+    return payload
 
 
 _HIDE = ("quarantin", "gate b", "bonus", "stock split", "share split", "split and bonus", "bonus and split")
 
+# Hard backstop for the per-holding budget (sentiment gets the most room since it draws on the most evidence) - word
+# count, not char count, so it cuts at a word boundary rather than mid-token.
+_MAX_WORDS = {"sentiment_rationale": 170, "governance_rationale": 85, "ca_rationale": 120}
+
+
+def _cap_words(text: str, n: int) -> str:
+    words = text.split()
+    if len(words) <= n:
+        return text
+    return " ".join(words[:n]).rstrip(".,;:") + "."
+
+
+_DASH_SEP = re.compile(r"\s*[–—]\s*|\s+-\s+")   # em dash, en dash, or a hyphen used as a spaced clause break
+
+
+def _delink_dashes(text: str) -> str:
+    """The prompt asks for no dashes, but this is the backstop: any em dash, en dash, or spaced hyphen used as a
+    clause break becomes a comma. A plain hyphen inside a word (non-executive, two-wheeler) is untouched."""
+    return _DASH_SEP.sub(", ", text)
+
 
 def scrub(out: dict) -> dict:
-    """Last line of defence for the per-stock text: drop any sentence that still mentions a quarantined corporate action."""
-    import re
+    """Last line of defence for the per-stock text: drop any sentence that still mentions a quarantined corporate action,
+    strip any dash used as a clause break, and hard-cap each rationale's length so 75+ holdings of commentary stays a
+    quick review, not a read."""
     clean = {}
     for k, v in out.items():
         if isinstance(v, str) and k != "one_line_read":
@@ -112,13 +193,16 @@ def scrub(out: dict) -> dict:
                 if kept:
                     paras.append(" ".join(kept))
             v = "\n\n".join(paras)
+            v = _delink_dashes(v)
+            if k in _MAX_WORDS:
+                v = _cap_words(v, _MAX_WORDS[k])
         clean[k] = v
     return clean
 
 
 
 class Narrator(Protocol):
-    def holding(self, s: StockScore, items: list[LabelledItem]) -> dict: ...
+    def holding(self, s: StockScore, items: list[LabelledItem], as_of=None, rubric=None) -> dict: ...
     def portfolio(self, facts: dict) -> list[dict]: ...
 
 
@@ -132,7 +216,7 @@ def key_actions(items: list[LabelledItem], limit: int = 3) -> str:
 
 class TemplateNarrator:
     """Deterministic fallback: restates evidence and arithmetic, no interpretation."""
-    def holding(self, s, items):
+    def holding(self, s, items, as_of=None, rubric=None):   # as_of/rubric accepted (unused) so CachedNarrator can wrap this too
         news = sorted((li for li in items if li.item.kind == "news"), key=lambda x: x.item.published, reverse=True)
         pos = [li for li in news if li.label.sentiment > 0][:3]
         neg = [li for li in news if li.label.sentiment < 0][:3]
@@ -192,8 +276,8 @@ class AnthropicNarrator:
                 return dict(b.input)
         raise RuntimeError("narrator returned no structured output")
 
-    def holding(self, s, items):
-        out = self._call(SYSTEM, json.dumps(evidence_payload(s, items), default=str), TOOL)
+    def holding(self, s, items, as_of=None, rubric=None):
+        out = self._call(SYSTEM, json.dumps(evidence_payload(s, items, as_of, rubric), default=str), TOOL)
         for k in ("sentiment_rationale", "governance_rationale", "ca_rationale", "one_line_read", "key_corporate_action", "coverage_note"):
             out.setdefault(k, "")
         return out
@@ -288,8 +372,8 @@ class CachedNarrator:
                         f.write(json.dumps({"key": key, "value": val}, ensure_ascii=False) + "\n")
         return self._d[key]
 
-    def holding(self, s, items):
-        return self._wrap("h", evidence_payload(s, items), lambda: self.inner.holding(s, items))
+    def holding(self, s, items, as_of=None, rubric=None):
+        return self._wrap("h", evidence_payload(s, items, as_of, rubric), lambda: self.inner.holding(s, items, as_of, rubric))
 
     def portfolio(self, facts):
         return self._wrap("p", facts, lambda: self.inner.portfolio(facts))

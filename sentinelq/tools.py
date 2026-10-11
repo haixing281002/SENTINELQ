@@ -322,7 +322,7 @@ def rescore(a) -> int:
         narrator = ClaudeCodeNarrator()
         narr, lint = {}, []
         with ThreadPoolExecutor(6) as ex:
-            for sc, out in zip(scores, ex.map(lambda sc: narrator.holding(sc, kept[sc.symbol]), scores)):
+            for sc, out in zip(scores, ex.map(lambda sc: narrator.holding(sc, kept[sc.symbol], as_of, rubric), scores)):
                 clean, removed = strip_price_sentences(out.get("sentiment_rationale", ""), rubric)
                 if removed:
                     out = {**out, "sentiment_rationale": clean}

@@ -100,9 +100,9 @@ def write_reports(out: Path, res: dict, rubric) -> None:
             swhy = "Not scored - " + (s_.sentiment_note.replace("INSUFFICIENT DATA: ", "") or "insufficient evidence")
         else:
             n_zero = sum(1 for li in kept.get(s_.symbol, []) if treat.get(id(li), {}).get("counted") == "yes" and li.label.sentiment == 0)
-            swhy = (f"Weighted mean {f_['mean']:+.2f} falls in the {s_.company_sentiment:+d} band ({band_txt[s_.company_sentiment]}). "
+            swhy = (f"Weighted mean {f_['mean']:+.1f} falls in the {s_.company_sentiment:+d} band ({band_txt[s_.company_sentiment]}). "
                     f"{f_['n_pos']} positive, {n_zero} neutral, {f_['n_neg']} negative articles; last 3 months carry {f_['recent']:.0%} of the weight. "
-                    + (f"Raw (unweighted) mean of the same articles: {s_.sentiment_raw_mean:+.2f} -> {s_.sentiment_raw_score:+d}."
+                    + (f"Raw (unweighted) mean of the same articles: {s_.sentiment_raw_mean:+.1f} -> {s_.sentiment_raw_score:+d}."
                        if s_.sentiment_raw_mean is not None else "Raw mean: not enough counted articles."))
         pens = s_.governance_penalties
         if pens:
@@ -111,7 +111,7 @@ def write_reports(out: Path, res: dict, rubric) -> None:
             gwhy = "No penalised governance event in the 12 months."
         if s_.governance_ignored:
             gwhy += f"\n{len(s_.governance_ignored)} flagged item(s) checked and not penalised - see Evidence - Governance."
-        if s_.ca_events or s_.ca_gate_a or s_.ca_gate_b:
+        if s_.ca_events or s_.ca_gate_a or s_.ca_gate_b or s_.ca_tracked_not_scored:
             cawhy = (f"{s_.ca_risk_score:.1f}/10 ({s_.ca_risk_band}).\n"
                      + "\n".join(f"{e['event_type'].replace('_', ' ')} {e['score']:.1f} ({e['direction']}, {e['date']}): {e['headline'][:65]}"
                                 for e in sorted(s_.ca_events, key=lambda x: -x["score"])[:5]))
@@ -119,6 +119,8 @@ def write_reports(out: Path, res: dict, rubric) -> None:
                 cawhy += "\nGATE A: forced to Exit - " + ", ".join(e["event_type"] for e in s_.ca_gate_a) + "."
             if s_.ca_gate_b:
                 cawhy += f"\n{len(s_.ca_gate_b)} event(s) data-quarantined (excluded from the score) - see Corporate Actions - Events."
+            if s_.ca_tracked_not_scored:
+                cawhy += f"\n{len(s_.ca_tracked_not_scored)} action(s) already completed - logged only, no longer scored - see Corporate Actions - Events."
             if s_.ca_opportunity_review:
                 cawhy += f"\nSeparately: Opportunity {s_.ca_opportunity_score:.1f}/10 triggers an event-trade review - this does not change the score or band above."
         else:
@@ -148,9 +150,9 @@ def write_reports(out: Path, res: dict, rubric) -> None:
         ws.row_dimensions[row[0].row].height = 62
         for c in row:
             c.alignment = Alignment(wrap_text=True, vertical="top")
-        for c in (3, 5):                                                                   # decimal means: 2 dp, no rounding shown as whole
+        for c in (3, 5, 6, 8):                                                             # every score: 1 dp, consistently, nothing rounded off
             if row[c].value is not None:
-                row[c].number_format = "0.00"
+                row[c].number_format = "0.0"
         row[2].fill = PatternFill("solid", fgColor=sfill.get(row[2].value, "FFFFFF"))      # Sentiment - Weighted (rounded)
         row[4].fill = PatternFill("solid", fgColor=sfill.get(row[4].value, "FFFFFF"))      # Sentiment - Raw (rounded)
         row[7].fill = PatternFill("solid", fgColor=FILLS.get(row[7].value, "FFFFFF"))      # Governance Label
@@ -358,9 +360,11 @@ def write_reports(out: Path, res: dict, rubric) -> None:
                             e["timing_mult"], e["timing_basis"], e["size_mult"], e["size_basis"], e["score"], e["direction"],
                             "Gate A - forces Exit" if e["gate_a"] else "", sourcing(e), e["rationale"], e["url"]])
         for e in s.ca_tracked_not_scored:
-            ca_rows.append([s.symbol, s.name, e["date"], e["headline"], e["event_type"], e["severity"], "", "", "", "",
-                            "", "", "", e["direction"], "tracked on the calendar only - not a formal corporate action (see rules doc)",
-                            sourcing(e), e["rationale"], e["url"]])
+            gate_txt = ("Completed - no longer scored (the action has already gone through; see rules doc)" if e.get("stage") == "completed"
+                        else "tracked on the calendar only - not a formal corporate action (see rules doc)")
+            ca_rows.append([s.symbol, s.name, e["date"], e["headline"], e["event_type"], e["severity"], e.get("stage", ""), e.get("stage_mult", ""),
+                            e.get("timing_mult", ""), e.get("timing_basis", ""), e.get("size_mult", ""), e.get("size_basis", ""), e.get("score", ""),
+                            e["direction"], gate_txt, sourcing(e), e["rationale"], e["url"]])
         for e in s.ca_gate_b:
             ca_rows.append([s.symbol, s.name, e["date"], e["headline"], e["event_type"], e["severity"], "", "", "", "",
                             "", "", "", e["direction"], "Gate B - data quarantine: excluded from the score", sourcing(e), e["rationale"], e["url"]])

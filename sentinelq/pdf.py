@@ -24,6 +24,7 @@ LABEL_TEXT = {"Clean": GREEN, "Watch": AMBER, "Flag": RED}
 CA_BAND_FILL = {"Log": "#e4f1ea", "Watch": "#fbf1de", "Review": "#fbf1de", "Act": "#f7e4e5", "Exit": "#f7e4e5"}
 CA_BAND_TEXT = {"Log": GREEN, "Watch": AMBER, "Review": AMBER, "Act": RED, "Exit": RED}
 SENT_TEXT = {2: GREEN, 1: GREEN2, 0: AMBER, -1: RED, -2: RED}
+SENT_FILL = {2: "#e4f1ea", 1: "#eef6f0", 0: "#fbf1de", -1: "#f7e4e5", -2: "#f7e4e5"}
 C = colors.HexColor
 
 # ---- styles -----------------------------------------------------------------------------------------------
@@ -136,7 +137,9 @@ def build_pdf(path: Path, res: dict, rubric, narr: dict, observations: list[dict
     # ============ Page 1 ============
     st += [P(title, TITLE), P("Signal Scorecard — News-derived sentiment, governance and corporate-action assessment", SUBTITLE)]
     cw = [51.0, 85.1, 62.3, 69.9, 52.0, 62.4, 42.5, 73.7]
-    info = Table([[P("Coverage", CELLB), P(meta.get("coverage") or f"{n} holdings", CELL), P("Research date", CELLB),
+    _cov = meta.get("coverage")                        # must be the short display string ("8 holdings") - NEVER the per-stock
+    cov_display = _cov if isinstance(_cov, str) and _cov else f"{n} holdings"   # retrieval-stats list (that list feeds the Excel Coverage sheet only)
+    info = Table([[P("Coverage", CELLB), P(cov_display, CELL), P("Research date", CELLB),
                    P(datestr, CELL), P("Lookback", CELLB), P("~12 months", CELL), P("Status", CELLB), P("Prototype", CELL)]],
                  colWidths=cw, hAlign="CENTER")
     info.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), C(TINT)), ("BOX", (0, 0), (-1, -1), 0.4, C(RULE)),
@@ -224,23 +227,28 @@ def build_pdf(path: Path, res: dict, rubric, narr: dict, observations: list[dict
     # ============ Scorecard table ============
     st += h1(f"Scorecard — all {n} holdings") + [P("Sorted by sentiment score (high to low), then by governance score.", SUBNOTE)]
     has_cap, has_wt = any(s.cap for s in scores), any(s.weight for s in scores)
-    cols = [("Company", 96.3, lambda s, r: P(s.name, CELLB)),
-            ("Cap", 32.0, lambda s, r: P(s.cap, CELLC)),
-            ("Sector", 62.3, lambda s, r: P(s.sector, CELL)),
-            ("Wt", 31.2, lambda s, r: P(s.weight, CELLC)),
-            ("Sent.", 31.2, lambda s, r: P(sent_txt(s.company_sentiment), CELLBC)),
-            ("Gov.", 28.3, lambda s, r: P(f"{s.governance_score:g}", CELLC)),
-            ("Label", 36.9, lambda s, r: P("FLAG" if s.governance_label == "Flag" else s.governance_label, CELLBC)),
-            ("Key corporate action", 109.8, lambda s, r: P(r["key_corporate_action"] or "—", CELL)),
-            ("One-line read", 76.5, lambda s, r: Paragraph(rl(r["one_line_read"]) + (f'<br/><font color="{MUTED}" size="5.6">{rl(s.coverage_map)}</font>' if s.coverage_map else ""), CELL))]
+    cols = [("Company", 94.0, lambda s, r: P(s.name, CELLB)),
+            ("Cap", 30.0, lambda s, r: P(s.cap, CELLC)),
+            ("Sector", 54.0, lambda s, r: P(s.sector, CELL)),
+            ("Wt", 28.0, lambda s, r: P(s.weight, CELLC)),
+            ("Sentiment Raw", 60.0, lambda s, r: P(f"{s.sentiment_raw_mean:+.3f}" if s.sentiment_raw_mean is not None else "n/a", CELLBC)),
+            ("Sentiment Weighted", 62.0, lambda s, r: P(f"{s.sentiment_weighted_mean:+.3f}" if s.sentiment_weighted_mean is not None else "n/a", CELLBC)),
+            ("Corporate Actions", 48.0, lambda s, r: P(f"{s.ca_risk_score:.2f}", CELLC)),
+            ("Governance", 58.0, lambda s, r: P(f"{s.governance_score:.1f}", CELLC)),
+            ("Label", 36.9, lambda s, r: P("FLAG" if s.governance_label == "Flag" else s.governance_label, CELLBC))]
     cols = [c for c in cols if not (c[0] == "Cap" and not has_cap) and not (c[0] == "Wt" and not has_wt)]
     scale = W / sum(c[1] for c in cols)
-    li = [c[0] for c in cols].index("Label")
+    names = [c[0] for c in cols]
+    li, sraw_i, swt_i, ca_i = (names.index("Label"), names.index("Sentiment Raw"),
+                               names.index("Sentiment Weighted"), names.index("Corporate Actions"))
     data = [[P(c[0], HDR) for c in cols]] + [[c[2](s, narr[s.symbol]) for c in cols] for s in scores]
     extra = [("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
              ("LEFTPADDING", (0, 0), (-1, -1), 4), ("RIGHTPADDING", (0, 0), (-1, -1), 4),
              ("GRID", (0, 0), (-1, -1), 0.35, C(RULE))]
     extra += [("BACKGROUND", (li, i), (li, i), C(LABEL_FILL[s.governance_label])) for i, s in enumerate(scores, 1)]
+    extra += [("BACKGROUND", (sraw_i, i), (sraw_i, i), C(SENT_FILL.get(s.sentiment_raw_score, "#ffffff"))) for i, s in enumerate(scores, 1)]
+    extra += [("BACKGROUND", (swt_i, i), (swt_i, i), C(SENT_FILL.get(s.company_sentiment, "#ffffff"))) for i, s in enumerate(scores, 1)]
+    extra += [("BACKGROUND", (ca_i, i), (ca_i, i), C(CA_BAND_FILL.get(s.ca_risk_band, "#ffffff"))) for i, s in enumerate(scores, 1)]
     t = Table(data, colWidths=[c[1] * scale for c in cols], repeatRows=1, hAlign="CENTER")
     t.setStyle(grid(extra))
     st += [t, Spacer(1, 12)]
@@ -259,23 +267,21 @@ def build_pdf(path: Path, res: dict, rubric, narr: dict, observations: list[dict
         nr = narr[s.symbol]
         lab = "FLAG" if s.governance_label == "Flag" else s.governance_label
         sc_col = SENT_TEXT.get(s.company_sentiment, AMBER)
-        ca_seg = (f'<font color="{MUTED}"> · </font><font color="{CA_BAND_TEXT.get(s.ca_risk_band, AMBER)}">'
-                  f'{rl(f"Corporate Actions {s.ca_risk_score:.1f} ({s.ca_risk_band})")}</font>') if (s.ca_events or s.ca_gate_a) else ""
-        line = Paragraph(f'<font color="{sc_col}">{rl("Sentiment " + sent_txt(s.company_sentiment))}</font>'
+        wt_txt = f"{s.sentiment_weighted_mean:+.3f}" if s.sentiment_weighted_mean is not None else "n/a"
+        raw_txt = f"{s.sentiment_raw_mean:+.3f}" if s.sentiment_raw_mean is not None else "n/a"
+        ca_seg = ""
+        if s.ca_events or s.ca_gate_a:
+            ca_seg = (f'<font color="{MUTED}"> · </font><font color="{CA_BAND_TEXT.get(s.ca_risk_band, AMBER)}">'
+                      f'{rl(f"Corporate Actions {s.ca_risk_score:.2f} ({s.ca_risk_band})")}</font>')
+        line = Paragraph(f'<font color="{sc_col}">{rl(f"Sentiment {wt_txt} / {raw_txt}")}</font>'
                          f'<font color="{MUTED}"> · </font>'
-                         f'<font color="{LABEL_TEXT[s.governance_label]}">{rl(f"Governance {s.governance_score:g} ({lab})")}</font>' + ca_seg, SCORE)
+                         f'<font color="{LABEL_TEXT[s.governance_label]}">{rl(f"Governance {s.governance_score:.1f} ({lab})")}</font>' + ca_seg, SCORE)
         sent = paras(nr["sentiment_rationale"]) + (paras(nr["coverage_note"]) if nr.get("coverage_note") else [])
         gov = paras(nr["governance_rationale"])
         ca_txt = paras(nr.get("ca_rationale") or "No corporate-action events scored in the lookback.")
-        weak = [e for e in list(s.ca_events) + list(s.ca_gate_a)
-                if e.get("n_sources") == 1 and e.get("max_tier") in ("T3", "T4")]
-        if weak:                                     # deterministic - never depends on the narrator remembering to say it
-            names = ", ".join(dict.fromkeys(f"{e['event_type'].replace('_', ' ')} ({e['date']})" for e in weak))
-            ca_txt += paras(f"Sourcing note: {names} relied on a single lower-tier outlet - its date and facts have not been "
-                            f"corroborated elsewhere and should be treated as unconfirmed, not settled fact.")
+        # Sourcing caveats (single lower-tier outlet) and the W1-4/events/tier coverage map are no longer printed here -
+        # this is a quick risk read, not a sourcing or coverage audit; both still live in the Excel appendix.
         head = [Paragraph(rl(s.name), ParagraphStyle("hold0", parent=HOLD, spaceBefore=0 if first else 20)), line]
-        if s.coverage_map:
-            head.append(Paragraph(f'<font color="{MUTED}">{rl("Coverage: " + s.coverage_map)}</font>', SUBNOTE))
         head.append(P("Sentiment rationale", H2))
         st.append(KeepTogether(head + sent[:1]))
         st += sent[1:] + [P("Governance rationale", H2A)] + gov + [P("Corporate Actions rationale", H2A)] + ca_txt
