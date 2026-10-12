@@ -44,11 +44,11 @@ class FileNarrator:
         self.missing: list[dict] = []
         self.tpl = TemplateNarrator()
 
-    def holding(self, s, items):
+    def holding(self, s, items, as_of=None, rubric=None):
         if s.symbol in self.data:
             return self.data[s.symbol]
         self.missing.append({"symbol": s.symbol, **evidence_payload(s, items)})
-        return self.tpl.holding(s, items)
+        return self.tpl.holding(s, items, as_of, rubric)
 
     def portfolio(self, facts):
         return self.data.get("_observations") or self.tpl.portfolio(facts)

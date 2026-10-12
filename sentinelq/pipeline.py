@@ -814,13 +814,18 @@ class Pipeline:
         ui.stage("Report", "workbook, commentary per stock, portfolio observations, PDF")
         narr, done_n, lint = {}, 0, []
         from .lint import strip_price_sentences
+        from .narrate import ensure_gate_b_coverage, quarantined_ca_summary
         with ThreadPoolExecutor(6) as ex:                                 # commentary: six holdings at a time
-            for sc, out in zip(scores, ex.map(lambda sc: self.narrator.holding(sc, kept[sc.symbol]), scores)):
+            for sc, out in zip(scores, ex.map(lambda sc: self.narrator.holding(sc, kept[sc.symbol], self.as_of, self.r), scores)):
                 clean, removed = strip_price_sentences(out.get("sentiment_rationale", ""), self.r)     # Reconciliation fix 5
                 if removed:
                     out = {**out, "sentiment_rationale": clean}
                     lint += [{"symbol": sc.symbol, "removed_sentence": x} for x in removed]
-                narr[sc.symbol] = scrub(out)
+                scrubbed = scrub(out)
+                # Applied AFTER scrub()'s word cap, never before: a deterministic guarantee that gets capped away
+                # before it runs is not a guarantee. See ensure_gate_b_coverage's docstring.
+                scrubbed["ca_rationale"] = ensure_gate_b_coverage(scrubbed.get("ca_rationale", ""), quarantined_ca_summary(sc), sc.name)
+                narr[sc.symbol] = scrubbed
                 done_n += 1
                 ui.narrate(done_n, len(scores), sc.name, sc.symbol)
         ui.clear_status()

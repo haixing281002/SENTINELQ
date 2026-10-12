@@ -269,10 +269,11 @@ class ClaudeCodeNarrator:
 
     def holding(self, s, items, as_of=None, rubric=None):
         keys = list(NARR_TOOL["input_schema"]["properties"])
+        payload = evidence_payload(s, items, as_of, rubric)
         prompt = (NARR_SYSTEM.replace("Answer by calling the tool.", "") +
                   "\nReply with ONLY a JSON object with keys " + ", ".join(keys) + " (field guidance: " +
                   json.dumps({k: v.get("description", "") for k, v in NARR_TOOL["input_schema"]["properties"].items()}) +
-                  ").\n\nDATA:\n" + json.dumps(evidence_payload(s, items, as_of, rubric), default=str))
+                  ").\n\nDATA:\n" + json.dumps(payload, default=str))
         out, missing = {}, list(_NARR_REQUIRED_NONEMPTY)
         for attempt in range(2):          # the CLI has no temperature control, so a retry is a fresh roll, not a no-op -
             out = extract_json(run_claude(prompt, self.model), "{")  # this caught a real case: a valid-JSON reply with
@@ -280,9 +281,10 @@ class ClaudeCodeNarrator:
                 out.setdefault(k, "")                                # pass straight through to the PDF unnoticed.
             missing = [k for k in _NARR_REQUIRED_NONEMPTY if not (out.get(k) or "").strip()]
             if not missing:
-                return out
-        for k in missing:                 # still incomplete after a retry: fail loud in the text itself, not silently
-            out[k] = f"[narrator returned no text for {k} after 2 attempts - rerun commentary for this holding]"
+                break
+        else:
+            for k in missing:             # still incomplete after a retry: fail loud in the text itself, not silently
+                out[k] = f"[narrator returned no text for {k} after 2 attempts - rerun commentary for this holding]"
         return out
 
     def portfolio(self, facts):

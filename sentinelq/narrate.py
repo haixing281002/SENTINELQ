@@ -156,6 +156,22 @@ def fmt_sent(x):
     return "n/a" if x is None else f"{x:+d}" if x else "0"
 
 
+def quarantined_ca_summary(s: StockScore) -> list[dict]:
+    """s.ca_gate_b grouped by event type: direction (or 'mixed'), article count, and the most recent headline/date.
+    Used both as narrator input (evidence_payload) and standalone by the deterministic coverage backstop
+    (ensure_gate_b_coverage) after scrub() - kept as one function so the two never drift apart."""
+    by_type: dict[str, list] = {}
+    for e in s.ca_gate_b:
+        by_type.setdefault(e["event_type"], []).append(e)
+    out = []
+    for et, events in by_type.items():
+        latest = sorted(events, key=lambda x: x["date"], reverse=True)
+        dirs = {e["direction"] for e in latest}
+        out.append({"event": et.replace("_", " "), "direction": dirs.pop() if len(dirs) == 1 else "mixed",
+                    "article_count": len(latest), "most_recent_headline": latest[0]["headline"], "most_recent_date": latest[0]["date"]})
+    return out
+
+
 def evidence_payload(s: StockScore, items: list[LabelledItem], as_of=None, rubric=None) -> dict:
     """What the commentary writer sees. No scores (they are shown elsewhere, not narrated). Gate-B events (splits, bonuses,
     mergers/acquisitions, demergers, rights issues, special dividends, ISIN changes) are excluded from the Risk/Opportunity
@@ -171,15 +187,7 @@ def evidence_payload(s: StockScore, items: list[LabelledItem], as_of=None, rubri
     re-deriving (and possibly disagreeing with) its own reading of the raw evidence list."""
     hidden = {e["url"] for e in s.ca_gate_b}
     gate_a_band = bool(s.ca_gate_a)   # Gate A overrides straight to Exit regardless of the arithmetic band
-    gate_b_by_type: dict[str, list] = {}
-    for e in s.ca_gate_b:
-        gate_b_by_type.setdefault(e["event_type"], []).append(e)
-    quarantined = []
-    for et, events in gate_b_by_type.items():
-        latest = sorted(events, key=lambda x: x["date"], reverse=True)
-        dirs = {e["direction"] for e in latest}
-        quarantined.append({"event": et.replace("_", " "), "direction": dirs.pop() if len(dirs) == 1 else "mixed",
-                            "article_count": len(latest), "most_recent_headline": latest[0]["headline"], "most_recent_date": latest[0]["date"]})
+    quarantined = quarantined_ca_summary(s)
     payload = {
         "company": s.name, "sector": s.sector,
         "sentiment_status": "insufficient data" if s.company_sentiment is None else "ok",
@@ -230,6 +238,79 @@ def evidence_payload(s: StockScore, items: list[LabelledItem], as_of=None, rubri
             "read_balance": balance,
         }
     return payload
+
+
+# Broad phrasing a model might legitimately use for each Gate B type - deliberately generous (covers "joint
+# venture"/"tie-up" for a JV-flavoured merger_acquisition, "fund raise" for a rights issue, etc.) so the backstop
+# below only fires when the type genuinely was not mentioned, not just phrased differently than expected.
+_GATE_B_SYNONYMS = {
+    "merger_acquisition": ("acqui", "merg", "joint venture", " jv ", " jv,", " jv.", "tie-up", "tie up", "stake in",
+                           "stake purchase", "buyout", "buy out", "takeover"),
+    "split_bonus": ("bonus", "split"),
+    "demerger": ("demerg", "spin off", "spin-off", "spun off", "separation"),
+    "rights_issue": ("rights issue", "rights offer", "fund raise", "fundraise", "fund-raise", "capital raise", "raise capital"),
+    "special_dividend": ("special divid",),
+    "name_symbol_isin_change": ("isin", "symbol change", "name change", "renam"),
+}
+
+
+_STOPWORDS = {"the", "a", "an", "to", "for", "and", "of", "in", "on", "at", "its", "with", "from", "by", "after",
+             "company", "ltd", "limited", "corp", "corporation", "india", "indias", "crore", "cr", "rs", "lakh",
+             # generic finance/corporate vocabulary - these show up in almost any sentence about almost any stock,
+             # so a coincidental match on one of these proves nothing about whether THIS event was mentioned
+             # (caught live: "stock" from the headline "Stock split/bonus 2:1" matched an unrelated sentence about
+             # "selling pressure overhanging the stock" and wrongly marked a real miss as already covered)
+             "stock", "stocks", "share", "shares", "price", "prices", "market", "markets", "shareholder",
+             "shareholders", "board", "announced", "announcement", "today", "year", "years", "quarter", "quarterly",
+             "financial", "results", "update", "updates", "news", "report", "reports"}
+
+
+def _headline_signal_words(headline: str, exclude: set[str], min_len: int = 5) -> set[str]:
+    """Distinctive words from a headline (deal names, figures, proper nouns) - these survive paraphrasing far
+    better than a fixed category-keyword list, since a model describing the same deal in different words tends to
+    still carry over the number or the counterparty name. `exclude` must include the company's own name/symbol:
+    without it, e.g. "Coforge" appears in literally every sentence about Coforge regardless of which specific
+    event is being discussed, so it would trivially "cover" anything and defeat this check entirely."""
+    words = re.findall(r"[a-zA-Z0-9]+", headline.lower())
+    return {w for w in words if len(w) >= min_len and w not in _STOPWORDS and w not in exclude}
+
+
+def ensure_gate_b_coverage(ca_text: str, quarantined: list[dict], company_name: str = "") -> str:
+    """Deterministic backstop: 'the model should mention every quarantined event' is a prompt instruction, not a
+    guarantee - the model is a non-deterministic CLI call with no temperature control, and it silently dropped one
+    of these at least once already. For any quarantined event type genuinely absent from ca_text - checked two
+    ways: a generous category-synonym list, AND an overlap with distinctive words from the actual headline (a deal
+    name or figure survives paraphrasing even when the category word doesn't) - append a plain, factual sentence
+    naming it. A false 'already covered' verdict here means a real miss slips through again, so when in doubt this
+    leans toward appending (a rare redundant sentence is far cheaper than a silent gap)."""
+    if not quarantined:
+        return ca_text
+    low = (ca_text or "").lower()
+    name_words = {w for w in re.findall(r"[a-zA-Z0-9]+", company_name.lower()) if len(w) >= 3}
+    missing = []
+    for q in quarantined:
+        key = q["event"].replace(" ", "_")
+        terms = _GATE_B_SYNONYMS.get(key, (q["event"],))
+        by_keyword = any(t in low for t in terms)
+        signal = _headline_signal_words(q.get("most_recent_headline", ""), name_words)
+        # Require 2+ overlapping distinctive words, not 1 - a single coincidental match (even after the stopword
+        # list above) isn't reliable evidence the specific event was actually discussed.
+        by_headline = sum(1 for w in signal if w in low) >= 2
+        if not (by_keyword or by_headline):
+            missing.append(q)
+    if not missing:
+        return ca_text
+    _DIR_PHRASE = {"positive": "reading positive for shareholders", "negative": "reading negative for shareholders",
+                  "mixed": "a mixed read for shareholders"}
+    extra = []
+    for q in missing:
+        dir_phrase = _DIR_PHRASE.get(q.get("direction"), "direction not yet clear")
+        n, headline = q.get("article_count", 1), q["most_recent_headline"][:90]
+        if n > 1:
+            extra.append(f"Separately, {n} {q['event']} developments are also on record, {dir_phrase}: \"{headline}\" and others.")
+        else:
+            extra.append(f"Separately, a {q['event']} development is also on record, {dir_phrase}: \"{headline}\".")
+    return (ca_text.rstrip() + " " + " ".join(extra)) if ca_text.strip() else " ".join(extra)
 
 
 _HIDE = ("quarantin", "gate b")   # internal mechanism jargon only - NOT the event types themselves (bonus/split/merger
@@ -365,7 +446,8 @@ class AnthropicNarrator:
         raise RuntimeError("narrator returned no structured output")
 
     def holding(self, s, items, as_of=None, rubric=None):
-        out = self._call(SYSTEM, json.dumps(evidence_payload(s, items, as_of, rubric), default=str), TOOL)
+        payload = evidence_payload(s, items, as_of, rubric)
+        out = self._call(SYSTEM, json.dumps(payload, default=str), TOOL)
         for k in ("sentiment_rationale", "governance_rationale", "ca_rationale", "one_line_read", "key_corporate_action", "coverage_note"):
             out.setdefault(k, "")
         return out

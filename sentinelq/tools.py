@@ -319,6 +319,7 @@ def rescore(a) -> int:
     print(f"[STEP 5/6 SCORE] rescored {len(scores)} stock(s) under rubric {rubric.version}")
 
     if getattr(a, "narrate", True):
+        from .narrate import ensure_gate_b_coverage, quarantined_ca_summary
         narrator = ClaudeCodeNarrator()
         narr, lint = {}, []
         with ThreadPoolExecutor(6) as ex:
@@ -327,7 +328,11 @@ def rescore(a) -> int:
                 if removed:
                     out = {**out, "sentiment_rationale": clean}
                     lint += [{"symbol": sc.symbol, "removed_sentence": x} for x in removed]
-                narr[sc.symbol] = scrub(out)
+                scrubbed = scrub(out)
+                # Applied AFTER scrub()'s word cap, never before: a deterministic guarantee that gets capped away
+                # before it runs is not a guarantee. See ensure_gate_b_coverage's docstring.
+                scrubbed["ca_rationale"] = ensure_gate_b_coverage(scrubbed.get("ca_rationale", ""), quarantined_ca_summary(sc), sc.name)
+                narr[sc.symbol] = scrubbed
                 print(f"  commentary refreshed for {sc.symbol}")
         obs = narrator.portfolio(portfolio_facts(scores, kept))
     else:                                              # --no-narrate: keep the prior commentary, scores/evidence only
