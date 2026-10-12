@@ -1,6 +1,6 @@
 {
-  "version": "2.0.0",
-  "_note": "Single source of truth for every weight, penalty and taxonomy entry. Scores change only if this file changes. Values marked 'assumed' were not stated in the architecture document and should be confirmed by the committee.",
+  "version": "2.1.0",
+  "_note": "Single source of truth for every weight, penalty and taxonomy entry. Scores change only if this file changes. Values marked 'assumed' were not stated in the architecture document and should be confirmed by the committee. v2.1.0 (2026-10-12): removed the completed-stage 1.0 Corporate Actions multiplier (an already-completed action is no longer scored at all, see stage_excluded_from_scoring below - Gate A types are exempt); fixed the governance verification gate silently vetoing promoter/subsidiary-subject penalties via occurred_at_company. Full history: CHANGELOG.md at the repo root.",
   "event_types": [
     "earnings_beat",
     "earnings_miss",
