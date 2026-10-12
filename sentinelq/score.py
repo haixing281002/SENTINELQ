@@ -317,7 +317,13 @@ def gate(li: LabelledItem, r: Rubric) -> tuple[float | None, str, str]:
     # 1. subject: the company must be the subject (not victim / lender / peer / sector / macro / shareholders)
     if lab.subject and lab.subject not in c["subject_ok"]:
         return None, f"subject is {lab.subject.replace('_', ' ')}, not the company - " + c["subject_never_penalised"].get(lab.subject, ""), "subject"
-    if lab.occurred_at_company is False:
+    # occurred_at_company is a sanity check for a COMPANY-subject item (catches a different entity with a similar
+    # name). It does not apply to promoter/subsidiary-subject items: a promoter pledge or a subsidiary action, by
+    # definition, happens at the promoter/subsidiary, not "at" the company - that is exactly what subject_ok already
+    # allows. Checking occurred_at_company for those too silently voided the promoter_or_insider/subsidiary carve-out
+    # above for almost every real case (a real bug found 2026-10-12: a materially-sized promoter pledge went
+    # unscored this way).
+    if lab.occurred_at_company is False and lab.subject not in ("promoter_or_insider", "subsidiary"):
         return None, "the event did not occur at the company", "subject"
     if lab.event_type in ("regulatory_action", "investigation", "exchange_fine") and _VICTIM.search(it.title):
         return None, "the company is the victim, not the subject", "subject"
