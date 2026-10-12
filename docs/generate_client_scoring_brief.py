@@ -12,7 +12,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.lib.enums import TA_LEFT, TA_CENTER
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable, PageBreak
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable, PageBreak, KeepTogether
 from reportlab.graphics.shapes import Drawing, Rect, String, Line, Polygon
 
 NAVY, INK, MUTED, RULE, TINT = "#1a2452", "#1a1a2e", "#5a6b9e", "#c9d1e5", "#f3f6fd"
@@ -261,9 +261,75 @@ st += [tbl(["", ""], rows, [120, W - 120], extra=[("FONTNAME", (0, 1), (0, -1), 
 st.append(Spacer(1, 10))
 st.append(HRFlowable(width="100%", thickness=0.5, color=C(RULE), spaceAfter=6))
 st += [P(
-    "This is a brief for a client and leadership audience, summarising the methodology only. A full technical "
-    "reference - every rubric field, every formula, a worked example - is available on request.",
+    "This is a brief for a client and leadership audience, summarising the methodology only. The full scoring "
+    "rubric - every category, penalty and multiplier - follows as an appendix.",
     S("disc", fontSize=7.6, leading=10, textColor=MUTED))]
+
+# ================= APPENDIX: full scoring rubric =================
+st.append(PageBreak())
+g = r["governance"]
+st += [P("Appendix", S("apptitle", fontName="Helvetica-Bold", fontSize=16, leading=20, textColor=NAVY, spaceAfter=2)),
+      P("The full scoring rubric - every category, penalty and multiplier referenced above", SUBTITLE)]
+
+st += h1("Sentiment anchors")
+
+
+def band_txt(sc):
+    return f"+{sc}" if sc > 0 else "0" if sc == 0 else f"−{abs(sc)}"
+
+
+rows = [[band_txt(sc), txt] for sc, txt in r["sentiment_anchors"]]
+st += [tbl(["Score", "Definition"], rows, [40, W - 40], extra=[
+        ("BACKGROUND", (0, 1), (0, 1), C(GREEN_FILL)), ("BACKGROUND", (0, 2), (0, 2), C(GREEN_FILL)),
+        ("BACKGROUND", (0, 3), (0, 3), C(AMBER_FILL)), ("BACKGROUND", (0, 4), (0, 4), C(RED_FILL)),
+        ("BACKGROUND", (0, 5), (0, 5), C(RED_FILL)), ("FONTNAME", (0, 1), (0, 5), "Helvetica-Bold"),
+        ("ALIGN", (0, 1), (0, 5), "CENTER")]), Spacer(1, 8)]
+
+st += h1("Governance - every penalised category")
+st += [P(f"Starts at {g['start']}. Each category counted once per stock (the most severe instance); penalties older "
+        f"than 6 months fade linearly to half by 12 months.", NOTE)]
+rows = [[cat, g["display"][k], note] for k, (cat, note) in g["notes"].items()]
+st += [tbl(["Category", "Penalty", "Notes"], rows, [128, 55, W - 183]), Spacer(1, 4)]
+st += [P("Routine items (scheduled succession, a resolved/quashed matter, an approved arm's-length related-party "
+        "transaction, a scheduled auditor rotation) are reviewed and never penalised.", NOTE)]
+
+st.append(PageBreak())
+ca = r["corporate_actions"]
+st += h1("Corporate Actions - severity by event type")
+st += [P("Each event's severity (below) is multiplied by stage, timing and size - see the three tables that follow - "
+        "capped at 10.", NOTE)]
+rows = [[str(sev), et.replace("_", " "), ca["damage_type"].get(et, "").capitalize()]
+       for et, sev in sorted(ca["severity"].items(), key=lambda x: -x[1])]
+st += [tbl(["Sev.", "Event type", "Damage"], rows, [36, W - 146, 110]), Spacer(1, 8)]
+
+st += h1("...multiplied by three more factors")
+sm = ca["stage_multiplier"]
+st += [P("Stage", H2),
+      tbl(["Stage", "Multiplier"], [[s.replace("_", " ").title(), f"x{v:g}"] for s, v in sm.items() if not s.startswith("_")],
+          [W - 70, 70])]
+st.append(Spacer(1, 6))
+st += [P("Timing", H2), P(
+    "Upcoming: >60 days out x0.5, 15-60 days x0.75, under 15 days x1.0. Already happened: decays by half every "
+    "N days from publication (30-180 days depending on event type, e.g. 30 for a dividend, 180 for a pledge).", BODY)]
+sb = ca["size_bands"]
+size_txt = ", ".join(f"above {sb[i - 1][0]:g}% -> x{mult:g}" if cutoff >= 900 else f"up to {cutoff:g}% -> x{mult:g}"
+                     for i, (cutoff, mult) in enumerate(sb))
+st += [P("Size", H2), P(
+    "From the stated size (dilution %, pledged % of promoter holding, rights discount %), or from materiality "
+    "(low/medium/high) when no percentage is given: " + size_txt + ".", BODY)]
+st.append(Spacer(1, 8))
+
+rows = [
+    ["Gate A - forced to Exit", "Insolvency admission; a pledge invocation; an auditor resignation citing withheld "
+     "information. Overrides the arithmetic entirely, regardless of score."],
+    ["Gate B - data quarantine", "Splits/bonuses, demergers, mergers/acquisitions, rights issues, special dividends, "
+     "ISIN/symbol changes. Excluded from the Risk/Opportunity number (a structure change needs its own data check), "
+     "but still flagged in the write-up, positive or negative."],
+]
+overrides_table = tbl(["", ""], rows, [120, W - 120], extra=[("FONTNAME", (0, 1), (0, -1), "Helvetica-Bold"),
+                                                              ("BACKGROUND", (0, 0), (-1, 0), colors.white),
+                                                              ("LINEBELOW", (0, 0), (-1, 0), 0, colors.white)])
+st.append(KeepTogether(h1("The two overrides") + [overrides_table]))
 
 doc.build(st)
 print("wrote SentinelQ_Scoring_Mechanism_Brief.pdf")
