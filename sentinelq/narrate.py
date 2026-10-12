@@ -113,14 +113,14 @@ TOOL = {
                 "is live, factor it in.' For each live SCORED corporate action: say plainly what it is and why it matters "
                 "for an entry decision today, in its own sentence, not chained to other events with commas. If there is "
                 "more than one live event, give each its moment, in order of how much it matters. "
-                "ALSO: if 'ca_quarantined_not_scored' is non-empty, add ONE sentence per entry (not one per article - these "
-                "are already grouped by type) flagging it plainly: what kind of action it is and whether it reads positive, "
-                "negative, or mixed for shareholders (from its 'direction'), e.g. 'Separately, the company has also been "
-                "acquisitive this year, picking up a handful of smaller businesses - a reasonable growth read, though it is "
-                "excluded from the score above since each deal changes the share count or structure enough to need its own "
-                "data check.' Always make clear in that sentence that it sits OUTSIDE the formal risk number for that "
-                "data-comparability reason, not because it was judged unimportant - never imply it raised or lowered the "
-                "score. Do not invent a severity or an entry-blocking read for it the way you would for a scored event. "
+                "ALSO: if 'ca_quarantined_not_scored' is non-empty, add ONE short sentence per entry (not one per article - "
+                "these are already grouped by type) simply flagging it: what kind of action it is and whether it reads "
+                "positive, negative, or mixed for shareholders (from its 'direction'), e.g. 'Separately, the company has "
+                "also been acquisitive this year, picking up a handful of smaller businesses, a reasonable growth read.' "
+                "Do NOT explain that it is excluded from the score, why, or that it 'does not count toward the number "
+                "above' - that methodology is already covered once on page 2 of the report; repeating it in every "
+                "holding's write-up is just noise that crowds out the actual point. State the event and its read, nothing "
+                "more. Do not invent a severity or an entry-blocking read for it the way you would for a scored event. "
                 "If there is nothing live AND nothing quarantined, say plainly 'No corporate-action concern for entry.' "
                 "NEVER state any score, band, severity number or multiplier for a SCORED event, and never mention sourcing "
                 "or outlet reliability (that lives in the Excel appendix, not here). Use commas and periods, never a dash.")},
@@ -161,8 +161,8 @@ def evidence_payload(s: StockScore, items: list[LabelledItem], as_of=None, rubri
     mergers/acquisitions, demergers, rights issues, special dividends, ISIN changes) are excluded from the Risk/Opportunity
     ARITHMETIC - share-count/structure changes need an adjustment-factor check before price/fundamentals are comparable
     again - but they are NOT hidden from the reader: 'ca_quarantined_not_scored' groups them by type (direction, how many
-    articles, the most recent headline) so the CA rationale can flag them, positive or negative, while making clear they
-    are excluded from the formal number for data-comparability reasons, not because they do not matter.
+    articles, the most recent headline) so the CA rationale can flag them, positive or negative, in one short sentence -
+    without re-explaining the exclusion methodology every time (that is covered once, on page 2 of the report).
     Includes 'governance_risk_emphasis' and 'ca_risk_emphasis' - plain-English calibration (derived from, but never equal to,
     the band) so a Flag/Exit holding is written with real weight instead of the same measured register as a Clean/Log one.
 
