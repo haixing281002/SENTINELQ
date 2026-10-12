@@ -259,6 +259,9 @@ class ClaudeCodeClassifier:
         return d if d else (None, "")
 
 
+_NARR_REQUIRED_NONEMPTY = ("sentiment_rationale", "governance_rationale", "ca_rationale", "one_line_read", "key_corporate_action")
+
+
 class ClaudeCodeNarrator:
     def __init__(self, model: str | None = None):
         self.model = model
@@ -270,9 +273,16 @@ class ClaudeCodeNarrator:
                   "\nReply with ONLY a JSON object with keys " + ", ".join(keys) + " (field guidance: " +
                   json.dumps({k: v.get("description", "") for k, v in NARR_TOOL["input_schema"]["properties"].items()}) +
                   ").\n\nDATA:\n" + json.dumps(evidence_payload(s, items, as_of, rubric), default=str))
-        out = extract_json(run_claude(prompt, self.model), "{")
-        for k in keys:
-            out.setdefault(k, "")
+        out, missing = {}, list(_NARR_REQUIRED_NONEMPTY)
+        for attempt in range(2):          # the CLI has no temperature control, so a retry is a fresh roll, not a no-op -
+            out = extract_json(run_claude(prompt, self.model), "{")  # this caught a real case: a valid-JSON reply with
+            for k in keys:                                          # every other field silently empty, which used to
+                out.setdefault(k, "")                                # pass straight through to the PDF unnoticed.
+            missing = [k for k in _NARR_REQUIRED_NONEMPTY if not (out.get(k) or "").strip()]
+            if not missing:
+                return out
+        for k in missing:                 # still incomplete after a retry: fail loud in the text itself, not silently
+            out[k] = f"[narrator returned no text for {k} after 2 attempts - rerun commentary for this holding]"
         return out
 
     def portfolio(self, facts):

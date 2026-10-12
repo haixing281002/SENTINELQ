@@ -106,17 +106,24 @@ TOOL = {
                 "score, mean, band, rating, points or label (no '+1', no 'weighted mean', no 'band'). Use commas and "
                 "periods, never a dash.")},
             "ca_rationale": {"type": "string", "description": (
-                "2-3 full sentences (~85-105 words), written as an EXPLANATION for the FM, not a news recap or a list of "
+                "2-4 full sentences (~85-130 words), written as an EXPLANATION for the FM, not a news recap or a list of "
                 "events. Match your intensity to 'ca_risk_emphasis' - a Log/Watch-tier item gets a plain, brief mention, "
                 "but a Review/Act/Exit-tier item needs you to actually spell out the risk: what could go wrong, roughly "
                 "how large the hit could be (dilution %, cost, lost optionality), and over what timeframe, not just 'this "
-                "is live, factor it in.' For each live corporate action: say plainly what it is and why it matters for an "
-                "entry decision today, in its own sentence, not chained to other events with commas. If there is more "
-                "than one live event, give each its moment, in order of how much it matters; do not try to fit them all "
-                "into a single crowded sentence. Or state plainly that it is benign, already behind the stock, with "
-                "nothing live. NEVER state any score, band, severity number or multiplier, and never mention sourcing or "
-                "outlet reliability (that lives in the Excel appendix, not here). If there are none, say plainly 'No "
-                "corporate-action concern for entry.' Use commas and periods, never a dash.")},
+                "is live, factor it in.' For each live SCORED corporate action: say plainly what it is and why it matters "
+                "for an entry decision today, in its own sentence, not chained to other events with commas. If there is "
+                "more than one live event, give each its moment, in order of how much it matters. "
+                "ALSO: if 'ca_quarantined_not_scored' is non-empty, add ONE sentence per entry (not one per article - these "
+                "are already grouped by type) flagging it plainly: what kind of action it is and whether it reads positive, "
+                "negative, or mixed for shareholders (from its 'direction'), e.g. 'Separately, the company has also been "
+                "acquisitive this year, picking up a handful of smaller businesses - a reasonable growth read, though it is "
+                "excluded from the score above since each deal changes the share count or structure enough to need its own "
+                "data check.' Always make clear in that sentence that it sits OUTSIDE the formal risk number for that "
+                "data-comparability reason, not because it was judged unimportant - never imply it raised or lowered the "
+                "score. Do not invent a severity or an entry-blocking read for it the way you would for a scored event. "
+                "If there is nothing live AND nothing quarantined, say plainly 'No corporate-action concern for entry.' "
+                "NEVER state any score, band, severity number or multiplier for a SCORED event, and never mention sourcing "
+                "or outlet reliability (that lives in the Excel appendix, not here). Use commas and periods, never a dash.")},
             "governance_rationale": {"type": "string", "description": (
                 "2-3 full sentences (~55-70 words), written as an EXPLANATION of the RISK this stock's governance history "
                 "poses GOING FORWARD, not a list of events. Match your intensity to 'governance_risk_emphasis' - a Clean "
@@ -150,8 +157,12 @@ def fmt_sent(x):
 
 
 def evidence_payload(s: StockScore, items: list[LabelledItem], as_of=None, rubric=None) -> dict:
-    """What the commentary writer sees. No scores (they are shown elsewhere, not narrated), and nothing about data-quarantined
-    corporate actions (splits, bonuses, ISIN changes...): those carry no economic signal and are kept out of the written report.
+    """What the commentary writer sees. No scores (they are shown elsewhere, not narrated). Gate-B events (splits, bonuses,
+    mergers/acquisitions, demergers, rights issues, special dividends, ISIN changes) are excluded from the Risk/Opportunity
+    ARITHMETIC - share-count/structure changes need an adjustment-factor check before price/fundamentals are comparable
+    again - but they are NOT hidden from the reader: 'ca_quarantined_not_scored' groups them by type (direction, how many
+    articles, the most recent headline) so the CA rationale can flag them, positive or negative, while making clear they
+    are excluded from the formal number for data-comparability reasons, not because they do not matter.
     Includes 'governance_risk_emphasis' and 'ca_risk_emphasis' - plain-English calibration (derived from, but never equal to,
     the band) so a Flag/Exit holding is written with real weight instead of the same measured register as a Clean/Log one.
 
@@ -160,6 +171,15 @@ def evidence_payload(s: StockScore, items: list[LabelledItem], as_of=None, rubri
     re-deriving (and possibly disagreeing with) its own reading of the raw evidence list."""
     hidden = {e["url"] for e in s.ca_gate_b}
     gate_a_band = bool(s.ca_gate_a)   # Gate A overrides straight to Exit regardless of the arithmetic band
+    gate_b_by_type: dict[str, list] = {}
+    for e in s.ca_gate_b:
+        gate_b_by_type.setdefault(e["event_type"], []).append(e)
+    quarantined = []
+    for et, events in gate_b_by_type.items():
+        latest = sorted(events, key=lambda x: x["date"], reverse=True)
+        dirs = {e["direction"] for e in latest}
+        quarantined.append({"event": et.replace("_", " "), "direction": dirs.pop() if len(dirs) == 1 else "mixed",
+                            "article_count": len(latest), "most_recent_headline": latest[0]["headline"], "most_recent_date": latest[0]["date"]})
     payload = {
         "company": s.name, "sector": s.sector,
         "sentiment_status": "insufficient data" if s.company_sentiment is None else "ok",
@@ -170,6 +190,7 @@ def evidence_payload(s: StockScore, items: list[LabelledItem], as_of=None, rubri
                        "direction": e["direction"], "stage": e["stage"]}
                       for e in sorted(s.ca_events, key=lambda x: -x["score"])],
         "ca_hard_override": [{"event": e["event_type"].replace("_", " "), "date": e["date"], "headline": e["headline"]} for e in s.ca_gate_a],
+        "ca_quarantined_not_scored": quarantined,
         "adverse_governance_events": [{"event": p["event_type"].replace("_", " "), "date": p["date"], "headline": p["headline"]}
                                       for p in s.governance_penalties],
         "reviewed_not_adverse": [{"event": p["event_type"].replace("_", " "), "date": p["date"], "headline": p["headline"], "why": p["why"]}
@@ -211,11 +232,13 @@ def evidence_payload(s: StockScore, items: list[LabelledItem], as_of=None, rubri
     return payload
 
 
-_HIDE = ("quarantin", "gate b", "bonus", "stock split", "share split", "split and bonus", "bonus and split")
+_HIDE = ("quarantin", "gate b")   # internal mechanism jargon only - NOT the event types themselves (bonus/split/merger
+                                   # mentions are now wanted in the CA rationale; this used to blacklist those words too
+                                   # and would have deleted every sentence this feature exists to produce)
 
 # Hard backstop for the per-holding budget (sentiment gets the most room since it draws on the most evidence) - word
 # count, not char count, so it cuts at a sentence boundary rather than mid-sentence.
-_MAX_WORDS = {"sentiment_rationale": 170, "governance_rationale": 85, "ca_rationale": 120}
+_MAX_WORDS = {"sentiment_rationale": 170, "governance_rationale": 85, "ca_rationale": 140}
 
 
 def _cap_words(text: str, n: int) -> str:
